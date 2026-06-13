@@ -1,0 +1,14 @@
+import { Hono } from 'hono';
+import { requireAuth, requireAdmin } from '../middleware/auth.js';
+import * as ctrl from './inventory.controller.js';
+import type { AppEnv } from '../types/index.js';
+
+const router = new Hono<AppEnv>();
+
+router.get('/',                    requireAuth, requireAdmin, ctrl.listAllInventory);
+router.get('/low-stock',           requireAuth, requireAdmin, ctrl.listLowStock);
+router.get('/:productId',          requireAuth, requireAdmin, ctrl.getInventory);
+router.post('/adjust',             requireAuth, requireAdmin, ctrl.adjustStock);
+router.put('/set',                 requireAuth, requireAdmin, ctrl.setStock);
+
+export default router;

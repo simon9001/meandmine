@@ -1,0 +1,22 @@
+import { Hono } from 'hono';
+import { requireAuth, requireAdmin } from '../middleware/auth.js';
+import * as ctrl from './products.controller.js';
+import type { AppEnv } from '../types/index.js';
+
+const router = new Hono<AppEnv>();
+
+// Public
+router.get('/',                                         ctrl.listProducts);
+router.get('/:slug',                                    ctrl.getProductBySlug);
+router.get('/:productId/suppliers',                     ctrl.getSupplierComparison);
+
+// Admin — product management
+router.post('/',                     requireAuth, requireAdmin, ctrl.createProduct);
+router.patch('/:id',                 requireAuth, requireAdmin, ctrl.updateProduct);
+router.delete('/:id',                requireAuth, requireAdmin, ctrl.deleteProduct);
+
+// Admin — media
+router.post('/:productId/media',     requireAuth, requireAdmin, ctrl.addProductMedia);
+router.delete('/:productId/media/:mediaId', requireAuth, requireAdmin, ctrl.deleteProductMedia);
+
+export default router;
