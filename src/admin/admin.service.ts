@@ -68,7 +68,7 @@ export async function getTopProducts(limit = 10) {
   const byProduct: Record<string, { product_id: string; name: string; sku: string | null; total_qty: number; total_revenue: number }> = {};
   for (const row of data ?? []) {
     const id = row.product_id as string;
-    const product = row.products as { name: string; sku: string | null } | null;
+    const product = row.products as unknown as { name: string; sku: string | null } | null;
     if (!byProduct[id]) {
       byProduct[id] = { product_id: id, name: product?.name ?? '', sku: product?.sku ?? null, total_qty: 0, total_revenue: 0 };
     }

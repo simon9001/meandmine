@@ -13,7 +13,7 @@ export async function listProducts(c: Context<AppEnv>) {
 
 export async function getProductBySlug(c: Context<AppEnv>) {
   const product = await svc.getProductBySlug(c.req.param('slug')!);
-  svc.incrementViewCount(product.id).catch(() => {});
+  svc.incrementViewCount(product.id as string).catch(() => {});
   productViewsTotal.inc();
   return ok(c, product);
 }

@@ -201,9 +201,9 @@ export async function getProductBySlug(slug: string) {
     })),
     trustBadges: (badges ?? []).map((b) => ({
       id:          b.badge_id,
-      title:       (b.trust_badges as { name: string } | null)?.name ?? '',
-      description: (b.trust_badges as { description?: string } | null)?.description,
-      iconUrl:     (b.trust_badges as { icon_url?: string } | null)?.icon_url,
+      title:       (b.trust_badges as unknown as { name: string } | null)?.name ?? '',
+      description: (b.trust_badges as unknown as { description?: string } | null)?.description,
+      iconUrl:     (b.trust_badges as unknown as { icon_url?: string } | null)?.icon_url,
     })),
   };
 }
