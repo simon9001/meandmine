@@ -80,7 +80,7 @@ export async function verifyOtp(c: Context<AppEnv>) {
 }
 
 export async function getMe(c: Context<AppEnv>) {
-  const user = c.get('user')!;
-  const profile = await authService.getMe(user.id);
-  return ok(c, profile);
+  const authUser = c.get('user')!;
+  const profile = await authService.getMe(authUser.id);
+  return ok(c, { ...profile, email: authUser.email, isEmailVerified: true });
 }

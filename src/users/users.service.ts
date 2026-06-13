@@ -9,7 +9,20 @@ export async function getProfile(userId: string) {
     .eq('id', userId)
     .single();
   if (error || !data) throw new NotFoundError('User');
-  return data;
+  return {
+    id:                data.id,
+    firstName:         data.first_name,
+    lastName:          data.last_name,
+    phone:             data.phone,
+    phoneVerified:     data.phone_verified,
+    avatarUrl:         data.avatar_url ?? null,
+    preferredCurrency: data.preferred_currency,
+    preferredLanguage: data.preferred_language,
+    notificationPrefs: data.notification_prefs,
+    isActive:          data.is_active,
+    lastLoginAt:       data.last_login_at,
+    createdAt:         data.created_at,
+  };
 }
 
 export async function updateProfile(userId: string, payload: {
@@ -36,7 +49,13 @@ export async function updateProfile(userId: string, payload: {
     .single();
 
   if (error || !data) throw new BadRequestError(error?.message ?? 'Update failed');
-  return data;
+  return {
+    id:        data.id,
+    firstName: data.first_name,
+    lastName:  data.last_name,
+    phone:     data.phone,
+    avatarUrl: data.avatar_url ?? null,
+  };
 }
 
 export async function updateAvatar(userId: string, avatarUrl: string) {

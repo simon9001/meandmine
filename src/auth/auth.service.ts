@@ -270,5 +270,13 @@ export async function getMe(userId: string) {
     .single();
 
   if (error || !data) throw new UnauthorizedError('Profile not found');
-  return data;
+
+  return {
+    id:        data.id,
+    role:      data.role,
+    firstName: data.first_name,
+    lastName:  data.last_name,
+    phone:     data.phone,
+    avatarUrl: data.avatar_url ?? null,
+  };
 }
