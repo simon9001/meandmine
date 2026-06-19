@@ -144,7 +144,7 @@ export async function createOrder(userId: string, payload: CheckoutPayload, ip?:
   }
 
   // Resolve shipping address snapshot
-  let shippingAddress: Record<string, unknown> = {};
+  let shippingAddress: Record<string, unknown> = payload.shippingAddress ?? {};
   if (payload.addressId) {
     const { data: addr } = await supabaseAdmin
       .from('addresses')
@@ -160,8 +160,11 @@ export async function createOrder(userId: string, payload: CheckoutPayload, ip?:
   const totalAmount   = Math.max(0, subtotal - discountAmount + shippingFee);
   const costTotal     = lineItems.reduce((s, i) => s + i.unitCost * i.quantity, 0);
 
+  const orderNumber = `ORD-${new Date().getFullYear()}-${Date.now().toString(36).toUpperCase()}`;
+
   // Create order
   const { data: order, error: orderErr } = await supabaseAdmin.from('orders').insert({
+    order_number:     orderNumber,
     user_id:          userId,
     shipping_address: shippingAddress,
     subtotal,
@@ -304,10 +307,12 @@ export interface GuestCheckoutPayload {
 export async function createGuestOrder(payload: GuestCheckoutPayload) {
   const subtotal    = payload.items.reduce((s, i) => s + i.price * i.quantity, 0);
   const totalAmount = subtotal + payload.shippingFee;
+  const guestOrderNumber = `ORD-${new Date().getFullYear()}-${Date.now().toString(36).toUpperCase()}`;
 
   const { data: order, error } = await supabaseAdmin
     .from('orders')
     .insert({
+      order_number:    guestOrderNumber,
       shipping_address: {
         recipient_name: payload.customerName,
         phone:          payload.phone,

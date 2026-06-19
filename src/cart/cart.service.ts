@@ -29,7 +29,7 @@ export async function getCart(userId?: string, sessionId?: string) {
 
   const { data: items } = await supabaseAdmin
     .from('cart_items')
-    .select('id, product_id, variant_id, supply_id, quantity, unit_price, products(id, name, slug, base_price, sale_price, status), product_variants(id, name, options, additional_price)')
+    .select('id, product_id, variant_id, supply_id, quantity, unit_price, products(id, name, slug, base_price, sale_price, status, product_media!product_id(url, is_primary)), product_variants(id, name, options, additional_price)')
     .eq('cart_id', cart.id);
 
   const subtotal = (items ?? []).reduce(

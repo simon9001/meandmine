@@ -14,6 +14,7 @@ const checkoutItemSchema = z.object({
 const checkoutSchema = z.object({
   items:           z.array(checkoutItemSchema).min(1),
   addressId:       z.string().uuid().optional(),
+  shippingAddress: z.record(z.string(), z.string()).optional(),
   discountCode:    z.string().optional(),
   shippingFee:     z.number().min(0).optional(),
   notes:           z.string().max(500).optional(),

@@ -76,6 +76,7 @@ export interface CheckoutItem {
 export interface CheckoutPayload {
   items: CheckoutItem[];
   addressId?: string;
+  shippingAddress?: Record<string, string>;
   discountCode?: string;
   shippingFee?: number;
   notes?: string;
