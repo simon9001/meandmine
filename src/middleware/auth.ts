@@ -1,14 +1,17 @@
 import { createMiddleware } from 'hono/factory';
+import { getCookie } from 'hono/cookie';
 import { supabaseAdmin, createUserClient } from '../config/db.js';
 import { UnauthorizedError, ForbiddenError } from '../utils/errors.js';
 import type { AppEnv, UserRole } from '../types/index.js';
 
 export const requireAuth = createMiddleware<AppEnv>(async (c, next) => {
+  // Prefer httpOnly cookie (browser). Fall back to Authorization header (API clients / mobile).
   const authHeader = c.req.header('Authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    throw new UnauthorizedError('Missing or malformed Authorization header');
-  }
-  const token = authHeader.slice(7);
+  const token = (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null)
+    ?? getCookie(c, 'access_token')
+    ?? null;
+
+  if (!token) throw new UnauthorizedError('Authentication required');
 
   const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
   if (error || !user) throw new UnauthorizedError('Invalid or expired token');
