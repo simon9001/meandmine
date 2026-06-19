@@ -251,7 +251,12 @@ export async function adminListOrders(query: {
   const { page, limit, offset } = parsePage(query);
   let q = supabaseAdmin
     .from('orders')
-    .select('id, order_number, user_id, status, payment_status, total_amount, profit_amount, currency, placed_at', { count: 'exact' })
+    .select(`
+      id, order_number, user_id, status, payment_status,
+      subtotal, shipping_fee, discount_amount, total_amount,
+      currency, placed_at, customer_note, shipping_address,
+      order_items(id, product_id, product_name, quantity, unit_price, total_price, fulfillment_status)
+    `, { count: 'exact' })
     .order('placed_at', { ascending: false })
     .range(offset, offset + limit - 1);
   if (query.status)        q = q.eq('status', query.status);
