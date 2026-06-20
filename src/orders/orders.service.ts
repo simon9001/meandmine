@@ -250,7 +250,29 @@ export async function adminListOrders(query: {
   return { data: data ?? [], meta: { total: count ?? 0, page, limit } };
 }
 
+const VALID_TRANSITIONS: Record<string, string[]> = {
+  pending_payment:   ['paid', 'cancelled'],
+  paid:              ['awaiting_dispatch', 'cancelled'],
+  awaiting_dispatch: ['dispatched', 'cancelled'],
+  dispatched:        ['delivered', 'cancelled'],
+  delivered:         [],
+  cancelled:         [],
+};
+
 export async function updateOrderStatus(orderId: string, status: string, adminNote?: string) {
+  const { data: current, error: fetchErr } = await supabaseAdmin
+    .from('orders')
+    .select('id, order_number, status, user_id')
+    .eq('id', orderId)
+    .single();
+  if (fetchErr || !current) throw new NotFoundError('Order');
+
+  const currentStatus = (current as { status: string }).status;
+  const allowed = VALID_TRANSITIONS[currentStatus] ?? [];
+  if (!allowed.includes(status)) {
+    throw new BadRequestError(`Cannot transition order from '${currentStatus}' to '${status}'`);
+  }
+
   const { data, error } = await supabaseAdmin
     .from('orders')
     .update({ status, admin_note: adminNote })

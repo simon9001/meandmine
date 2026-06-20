@@ -73,20 +73,20 @@ async function handlePaymentConfirmed(opts: {
       try {
         const { data: inv } = await supabaseAdmin
           .from('inventory')
-          .select('id, available_stock')
+          .select('id, total_stock, reserved_stock')
           .eq('product_id', item.product_id)
           .is('variant_id', item.variant_id ?? null)
           .maybeSingle();
 
         if (inv) {
-          const newStock = Math.max(
-            0,
-            (inv as { id: string; available_stock: number }).available_stock - item.quantity,
-          );
+          const row = inv as { id: string; total_stock: number; reserved_stock: number };
           await supabaseAdmin
             .from('inventory')
-            .update({ available_stock: newStock })
-            .eq('id', (inv as { id: string }).id);
+            .update({
+              total_stock:    Math.max(0, row.total_stock    - item.quantity),
+              reserved_stock: Math.max(0, row.reserved_stock - item.quantity),
+            })
+            .eq('id', row.id);
         }
       } catch {
         // Inventory decrement is non-critical — log and continue
@@ -179,7 +179,7 @@ export async function initializePayment(userId: string, orderId: string) {
     currency: 'KES',
     reference: `ORD-${(order as { order_number: string }).order_number}-${Date.now()}`,
     metadata: { order_id: orderId, user_id: userId, order_number: (order as { order_number: string }).order_number },
-    callback_url: `${env.FRONTEND_URL}/orders/${orderId}/confirm`,
+    callback_url: `${env.FRONTEND_URL}/checkout/confirm`,
   }) as { reference: string; authorization_url: string; access_code: string };
 
   await supabaseAdmin.from('payments').insert({

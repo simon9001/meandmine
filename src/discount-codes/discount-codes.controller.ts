@@ -6,10 +6,23 @@ import type { AppEnv } from '../types/index.js';
 
 export async function validateCode(c: Context<AppEnv>) {
   const user = c.get('user')!;
-  const { code, subtotal } = z.object({
-    code:     z.string().min(1),
-    subtotal: z.number().min(0),
-  }).parse(await c.req.json());
+  const { code } = z.object({ code: z.string().min(1) }).parse(await c.req.json());
+
+  // Compute subtotal from the user's actual cart — never trust client-provided amounts
+  const { supabaseAdmin } = await import('../config/db.js');
+  const { data: cart } = await supabaseAdmin
+    .from('carts')
+    .select('cart_items(quantity, unit_price)')
+    .eq('user_id', user.id)
+    .gt('expires_at', new Date().toISOString())
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  type CartItem = { quantity: number; unit_price: number };
+  const items = (cart as { cart_items?: CartItem[] } | null)?.cart_items ?? [];
+  const subtotal = items.reduce((s: number, i: CartItem) => s + (Number(i.unit_price) * i.quantity), 0);
+
   return ok(c, await svc.validateDiscountCode(code, user.id, subtotal));
 }
 

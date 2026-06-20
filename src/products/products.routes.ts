@@ -8,7 +8,9 @@ const router = new Hono<AppEnv>();
 // Public
 router.get('/',                                         ctrl.listProducts);
 router.get('/:slug',                                    ctrl.getProductBySlug);
-router.get('/:productId/suppliers',                     ctrl.getSupplierComparison);
+
+// Admin — supplier intelligence (not for public)
+router.get('/:productId/suppliers',  requireAuth, requireAdmin, ctrl.getSupplierComparison);
 
 // Admin — product management
 router.post('/',                     requireAuth, requireAdmin, ctrl.createProduct);
