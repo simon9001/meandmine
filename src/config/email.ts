@@ -169,16 +169,57 @@ export const templates = {
       </div>`,
   }),
 
-  shipmentDispatched: (orderNumber: string, trackingNumber: string, carrier: string) => ({
-    subject: `Your order ${orderNumber} has shipped!`,
+  orderDispatched: (
+    orderNumber: string,
+    customerName: string,
+    items: { name: string; quantity: number }[],
+    dispatchInfo: {
+      provider?:       string;
+      parcelRef?:      string;
+      trackingNo?:     string;
+      collectionPoint?: string;
+      dispatchNotes?:  string;
+    } = {},
+  ) => ({
+    subject: `Your order ${orderNumber} is on the way! 🚚`,
     html: `
       <div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:32px 24px">
-        <h1 style="color:#111">Your order is on its way!</h1>
-        <p>Order <strong>${orderNumber}</strong> has been dispatched via <strong>${carrier}</strong>.</p>
-        <p>Tracking number: <strong>${trackingNumber}</strong></p>
-        <a href="${env.FRONTEND_URL}/account/orders" style="display:inline-block;padding:12px 24px;background:#111;color:#fff;text-decoration:none;border-radius:6px;margin-top:16px">
-          Track Shipment
+        <div style="background:#eff6ff;border-radius:12px;padding:24px;text-align:center;margin-bottom:24px">
+          <p style="font-size:40px;margin:0">🚚</p>
+          <h1 style="color:#1d4ed8;margin:8px 0 4px">Your Order Is On The Way!</h1>
+          <p style="color:#1e40af;margin:0;font-size:14px">Order <strong>${orderNumber}</strong> has been dispatched</p>
+        </div>
+        <p>Hi${customerName ? ` ${customerName}` : ''},</p>
+        <p>Great news! Your order has been dispatched and is on its way to you.</p>
+        ${items.length > 0 ? `
+        <h3 style="color:#111;margin-top:24px;margin-bottom:12px;font-size:15px">Items In This Order</h3>
+        <table style="width:100%;border-collapse:collapse;font-size:14px">
+          <tbody>
+            ${items.map((i) => `
+            <tr>
+              <td style="padding:8px 12px;border-bottom:1px solid #f3f4f6;color:#111">${i.name}</td>
+              <td style="padding:8px 12px;border-bottom:1px solid #f3f4f6;color:#6b7280;text-align:right">× ${i.quantity}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>` : ''}
+        <div style="background:#f9fafb;border-radius:8px;padding:20px;margin-top:24px">
+          <h3 style="color:#111;margin:0 0 12px;font-size:14px;font-weight:600">Dispatch Details</h3>
+          ${dispatchInfo.provider        ? `<p style="margin:4px 0;font-size:13px;color:#374151"><strong>Provider:</strong> ${dispatchInfo.provider}</p>` : ''}
+          ${dispatchInfo.parcelRef       ? `<p style="margin:4px 0;font-size:13px;color:#374151"><strong>Parcel Reference:</strong> ${dispatchInfo.parcelRef}</p>` : ''}
+          ${dispatchInfo.trackingNo      ? `<p style="margin:4px 0;font-size:13px;color:#374151"><strong>Tracking Number:</strong> ${dispatchInfo.trackingNo}</p>` : ''}
+          ${dispatchInfo.collectionPoint ? `<p style="margin:4px 0;font-size:13px;color:#374151"><strong>Collection Point:</strong> ${dispatchInfo.collectionPoint}</p>` : ''}
+          ${dispatchInfo.dispatchNotes   ? `<p style="margin:4px 0;font-size:13px;color:#374151"><strong>Notes:</strong> ${dispatchInfo.dispatchNotes}</p>` : ''}
+        </div>
+        <p style="margin-top:24px">Track the status of your order from your account dashboard.</p>
+        <a href="${env.FRONTEND_URL}/account/orders" style="display:inline-block;padding:12px 28px;background:#1d4ed8;color:#fff;text-decoration:none;border-radius:8px;margin-top:16px;font-weight:600">
+          Track Your Order →
         </a>
+        <hr style="border:none;border-top:1px solid #e5e7eb;margin:32px 0" />
+        <p style="color:#9ca3af;font-size:12px">
+          Order reference: <strong>${orderNumber}</strong><br />
+          If you have any questions, reply to this email.
+        </p>
       </div>`,
+    text: `Your order ${orderNumber} has been dispatched!\n\n${dispatchInfo.provider ? `Provider: ${dispatchInfo.provider}\n` : ''}${dispatchInfo.parcelRef ? `Parcel Ref: ${dispatchInfo.parcelRef}\n` : ''}${dispatchInfo.trackingNo ? `Tracking: ${dispatchInfo.trackingNo}\n` : ''}${dispatchInfo.collectionPoint ? `Collection Point: ${dispatchInfo.collectionPoint}\n` : ''}\nTrack your order: ${env.FRONTEND_URL}/account/orders`,
   }),
 };

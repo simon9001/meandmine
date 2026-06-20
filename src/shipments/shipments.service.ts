@@ -9,8 +9,8 @@ export async function createShipment(payload: {
   const { data: order } = await supabaseAdmin
     .from('orders').select('id, user_id, status').eq('id', payload.orderId).single();
   if (!order) throw new NotFoundError('Order');
-  if (!['confirmed', 'processing'].includes((order as { status: string }).status)) {
-    throw new BadRequestError('Order must be confirmed or processing to create shipment');
+  if (!['awaiting_dispatch', 'paid'].includes((order as { status: string }).status)) {
+    throw new BadRequestError('Order must be paid and awaiting dispatch to create shipment');
   }
 
   const { data, error } = await supabaseAdmin.from('shipments').insert({
@@ -24,17 +24,21 @@ export async function createShipment(payload: {
   }).select().single();
   if (error || !data) throw new BadRequestError(error?.message ?? 'Shipment creation failed');
 
-  await supabaseAdmin.from('orders').update({ status: 'shipped' }).eq('id', payload.orderId);
+  await supabaseAdmin.from('orders').update({ status: 'dispatched' }).eq('id', payload.orderId);
 
   // Notify customer
   const { data: authUser } = await supabaseAdmin.auth.admin.getUserById((order as { user_id: string }).user_id);
   if (authUser.user?.email) {
     sendEmail({
       to: [{ email: authUser.user.email }],
-      ...templates.shipmentDispatched(
+      ...templates.orderDispatched(
         payload.orderId,
-        payload.trackingNumber ?? '',
-        payload.carrier ?? 'Carrier',
+        '',
+        [],
+        {
+          trackingNo: payload.trackingNumber,
+          provider:   payload.carrier,
+        },
       ),
     }).catch(() => {});
   }

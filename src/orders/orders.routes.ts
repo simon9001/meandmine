@@ -19,5 +19,6 @@ router.post('/:orderId/cancel',         requireAuth, ctrl.cancelOrder);
 router.get('/',                         requireAuth, requireAdmin, ctrl.adminListOrders);
 router.get('/:orderId',                 requireAuth, requireAdmin, ctrl.adminGetOrder);
 router.patch('/:orderId/status',        requireAuth, requireAdmin, ctrl.updateOrderStatus);
+router.patch('/:orderId/dispatch',      requireAuth, requireAdmin, ctrl.dispatchOrder);
 
 export default router;

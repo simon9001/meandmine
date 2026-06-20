@@ -43,12 +43,19 @@ async function handlePaymentConfirmed(opts: {
     payment_method: paymentMethod,
   }).eq('id', paymentId);
 
-  // Confirm the order
+  // Mark order as paid and move immediately to awaiting_dispatch
   await supabaseAdmin.from('orders').update({
     payment_status: 'paid',
-    status:         'confirmed',
+    status:         'awaiting_dispatch',
     paid_at:        paidAt,
   }).eq('id', orderId);
+
+  await supabaseAdmin.from('order_status_history').insert({
+    order_id:    orderId,
+    from_status: 'pending_payment',
+    to_status:   'awaiting_dispatch',
+    changed_at:  paidAt,
+  });
 
   // Fetch order details (number, total, line items) for inventory + email
   const { data: orderData } = await supabaseAdmin

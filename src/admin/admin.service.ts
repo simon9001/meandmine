@@ -8,7 +8,7 @@ export async function getDashboardStats() {
     supabaseAdmin.from('user_profiles').select('id', { count: 'exact' }),
     supabaseAdmin.from('orders')
       .select('total_amount')
-      .eq('payment_status', 'successful')
+      .eq('payment_status', 'paid')
       .gte('placed_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()),
   ]);
 
@@ -19,8 +19,8 @@ export async function getDashboardStats() {
   return {
     orders: {
       total:     orders.count ?? 0,
-      pending:   (orders.data ?? []).filter(o => (o as { status: string }).status === 'pending').length,
-      shipped:   (orders.data ?? []).filter(o => (o as { status: string }).status === 'shipped').length,
+      pending:   (orders.data ?? []).filter(o => (o as { status: string }).status === 'awaiting_dispatch').length,
+      shipped:   (orders.data ?? []).filter(o => (o as { status: string }).status === 'dispatched').length,
       delivered: (orders.data ?? []).filter(o => (o as { status: string }).status === 'delivered').length,
     },
     products: {
@@ -38,7 +38,7 @@ export async function getDailyRevenue(days = 30) {
   const { data, error } = await supabaseAdmin
     .from('orders')
     .select('placed_at, total_amount')
-    .eq('payment_status', 'successful')
+    .eq('payment_status', 'paid')
     .gte('placed_at', since)
     .order('placed_at', { ascending: false });
   if (error) {

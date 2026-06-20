@@ -11,14 +11,30 @@ const checkoutItemSchema = z.object({
   quantity:  z.number().int().min(1),
 });
 
+const deliveryInfoSchema = z.object({
+  recipientName:     z.string().min(1, 'Recipient name is required'),
+  phone:             z.string().min(9).max(15),
+  county:            z.string().min(1, 'County is required'),
+  town:              z.string().min(1, 'Town is required'),
+  stage:             z.string().optional(),
+  deliveryMethod:    z.enum(['home_delivery', 'pickup']),
+  preferredProvider: z.string().optional(),
+  instructions:      z.string().max(500).optional(),
+});
+
 const checkoutSchema = z.object({
-  items:           z.array(checkoutItemSchema).min(1),
-  addressId:       z.string().uuid().optional(),
-  shippingAddress: z.record(z.string(), z.string()).optional(),
-  discountCode:    z.string().optional(),
-  shippingFee:     z.number().min(0).optional(),
-  notes:           z.string().max(500).optional(),
-  idempotencyKey:  z.string().optional(),
+  items:          z.array(checkoutItemSchema).min(1),
+  deliveryInfo:   deliveryInfoSchema,
+  discountCode:   z.string().optional(),
+  notes:          z.string().max(500).optional(),
+  idempotencyKey: z.string().optional(),
+});
+
+const dispatchSchema = z.object({
+  parcelRef:       z.string().optional(),
+  trackingNo:      z.string().optional(),
+  collectionPoint: z.string().optional(),
+  dispatchNotes:   z.string().max(1000).optional(),
 });
 
 export async function listMyOrders(c: Context<AppEnv>) {
@@ -58,10 +74,15 @@ export async function adminGetOrder(c: Context<AppEnv>) {
 
 export async function updateOrderStatus(c: Context<AppEnv>) {
   const { status, adminNote } = z.object({
-    status:    z.enum(['pending', 'confirmed', 'processing', 'dispatched', 'out_for_delivery', 'shipped', 'delivered', 'cancelled', 'refunded']),
+    status:    z.enum(['pending_payment', 'paid', 'awaiting_dispatch', 'dispatched', 'delivered', 'cancelled']),
     adminNote: z.string().optional(),
   }).parse(await c.req.json());
   return ok(c, await svc.updateOrderStatus(c.req.param('orderId')!, status, adminNote));
+}
+
+export async function dispatchOrder(c: Context<AppEnv>) {
+  const body = dispatchSchema.parse(await c.req.json());
+  return ok(c, await svc.dispatchOrder(c.req.param('orderId')!, body));
 }
 
 // ─── Guest checkout & public tracking ────────────────────────────────────────

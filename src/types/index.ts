@@ -3,14 +3,12 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 export type UserRole = 'customer' | 'admin' | 'superadmin' | 'supplier_rep';
 
 export type OrderStatus =
-  | 'pending'
-  | 'confirmed'
-  | 'processing'
-  | 'shipped'
+  | 'pending_payment'
+  | 'paid'
+  | 'awaiting_dispatch'
+  | 'dispatched'
   | 'delivered'
-  | 'cancelled'
-  | 'refunded'
-  | 'disputed';
+  | 'cancelled';
 
 export type PaymentStatus =
   | 'pending'
@@ -73,12 +71,21 @@ export interface CheckoutItem {
   quantity: number;
 }
 
+export interface DeliveryInfo {
+  recipientName:      string;
+  phone:              string;
+  county:             string;
+  town:               string;
+  stage?:             string;
+  deliveryMethod:     'home_delivery' | 'pickup';
+  preferredProvider?: string;
+  instructions?:      string;
+}
+
 export interface CheckoutPayload {
-  items: CheckoutItem[];
-  addressId?: string;
-  shippingAddress?: Record<string, string>;
-  discountCode?: string;
-  shippingFee?: number;
-  notes?: string;
+  items:           CheckoutItem[];
+  deliveryInfo:    DeliveryInfo;
+  discountCode?:   string;
+  notes?:          string;
   idempotencyKey?: string;
 }
