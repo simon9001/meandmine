@@ -15,7 +15,7 @@ export type OrderStatus =
 export type PaymentStatus =
   | 'pending'
   | 'initiated'
-  | 'successful'
+  | 'paid'
   | 'failed'
   | 'refunded'
   | 'partially_refunded';

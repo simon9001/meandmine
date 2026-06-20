@@ -208,18 +208,15 @@ export async function createOrder(userId: string, payload: CheckoutPayload, ip?:
     } as Record<string, unknown>).eq('id', discountCodeId);
   }
 
-  ordersCreatedTotal.inc({ status: 'pending' });
+  // Record initial status in history
+  await supabaseAdmin.from('order_status_history').insert({
+    order_id:    (order as { id: string }).id,
+    from_status: null,
+    to_status:   'pending',
+    changed_at:  new Date().toISOString(),
+  });
 
-  // Confirmation email (non-blocking)
-  const { data: authUser } = await supabaseAdmin.auth.admin.getUserById(userId);
-  const { data: profile } = await supabaseAdmin.from('user_profiles').select('first_name, last_name').eq('id', userId).single();
-  if (authUser.user?.email) {
-    const name = profile ? `${(profile as { first_name: string }).first_name} ${(profile as { last_name: string }).last_name}`.trim() : '';
-    sendEmail({
-      to: [{ email: authUser.user.email, name }],
-      ...templates.orderConfirmed((order as { order_number: string }).order_number, totalAmount, name),
-    }).catch(() => {});
-  }
+  ordersCreatedTotal.inc({ status: 'pending' });
 
   return order;
 }

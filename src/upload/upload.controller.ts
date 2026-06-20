@@ -52,3 +52,9 @@ export async function uploadPromotionImage(c: Context<AppEnv>) {
   if (!file || !(file instanceof File)) throw new BadRequestError('file field is required');
   return ok(c, await svc.uploadPromotionImage(file));
 }
+
+export async function deleteUploadedImage(c: Context<AppEnv>) {
+  const { publicId } = z.object({ publicId: z.string().min(1) }).parse(await c.req.json());
+  await svc.deleteImage(publicId);
+  return ok(c, { deleted: true });
+}

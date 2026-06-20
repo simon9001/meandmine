@@ -1,5 +1,18 @@
 import { supabaseAdmin } from '../config/db.js';
 import { NotFoundError, BadRequestError, ConflictError } from '../utils/errors.js';
+import { deleteImage } from '../upload/upload.service.js';
+
+function extractCloudinaryPublicId(url: string): string | null {
+  try {
+    const { pathname } = new URL(url);
+    const parts = pathname.split('/upload/');
+    if (parts.length < 2) return null;
+    const afterUpload = parts[1].replace(/^v\d+\//, ''); // strip version prefix
+    return afterUpload.replace(/\.[^/.]+$/, '');          // strip file extension
+  } catch {
+    return null;
+  }
+}
 import { parsePage } from '../utils/pagination.js';
 
 export interface ProductFilters {
@@ -307,6 +320,18 @@ export async function updateProduct(id: string, payload: Partial<{
 }
 
 export async function deleteProduct(id: string) {
+  // Clean up all product images from Cloudinary before archiving
+  const { data: mediaRows } = await supabaseAdmin
+    .from('product_media').select('url').eq('product_id', id);
+  if (mediaRows?.length) {
+    await Promise.allSettled(
+      mediaRows.map((m) => {
+        const pid = extractCloudinaryPublicId(m.url);
+        return pid ? deleteImage(pid) : Promise.resolve();
+      })
+    );
+  }
+
   const { error } = await supabaseAdmin
     .from('products').update({ status: 'archived' }).eq('id', id);
   if (error) throw new NotFoundError('Product');
@@ -335,9 +360,18 @@ export async function addProductMedia(productId: string, payload: {
 }
 
 export async function deleteProductMedia(productId: string, mediaId: string) {
+  // Fetch URL first so we can clean up Cloudinary
+  const { data: row } = await supabaseAdmin
+    .from('product_media').select('url').eq('id', mediaId).eq('product_id', productId).single();
+
   const { error } = await supabaseAdmin
     .from('product_media').delete().eq('id', mediaId).eq('product_id', productId);
   if (error) throw new NotFoundError('Media');
+
+  if (row) {
+    const pid = extractCloudinaryPublicId(row.url);
+    if (pid) await deleteImage(pid).catch(() => {});
+  }
 }
 
 // ─── Supplier comparison (product page) ───────────────────────────────────────

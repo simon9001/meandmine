@@ -82,18 +82,78 @@ export const templates = {
   }),
 
   orderConfirmed: (orderNumber: string, total: number, customerName = '') => ({
-    subject: `Order Confirmed — ${orderNumber}`,
+    subject: `Order Received — ${orderNumber}`,
     html: `
       <div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:32px 24px">
-        <h1 style="color:#111">Order Confirmed!</h1>
+        <h1 style="color:#111">Order Received!</h1>
         <p>Hi${customerName ? ` ${customerName}` : ''},</p>
-        <p>Your order <strong>${orderNumber}</strong> has been placed successfully.</p>
+        <p>We've received your order <strong>${orderNumber}</strong> and are awaiting your payment.</p>
         <p style="font-size:20px;font-weight:700">Total: KES ${total.toLocaleString('en-KE', { minimumFractionDigits: 2 })}</p>
-        <p>We'll notify you once your order ships.</p>
+        <p>You'll receive a payment confirmation email once we verify your payment.</p>
         <a href="${env.FRONTEND_URL}/account/orders" style="display:inline-block;padding:12px 24px;background:#111;color:#fff;text-decoration:none;border-radius:6px;margin-top:16px">
           View Order
         </a>
       </div>`,
+  }),
+
+  paymentConfirmed: (
+    orderNumber: string,
+    total: number,
+    customerName = '',
+    items: { name: string; quantity: number; price: number }[] = [],
+  ) => ({
+    subject: `Payment Confirmed — ${orderNumber} ✓`,
+    html: `
+      <div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:32px 24px">
+        <div style="background:#f0fdf4;border-radius:12px;padding:24px;text-align:center;margin-bottom:24px">
+          <p style="font-size:40px;margin:0">✅</p>
+          <h1 style="color:#15803d;margin:8px 0 4px">Payment Confirmed!</h1>
+          <p style="color:#166534;margin:0;font-size:14px">Your order is now being processed</p>
+        </div>
+
+        <p>Hi${customerName ? ` ${customerName}` : ''},</p>
+        <p>Great news! We've received your payment for order <strong>${orderNumber}</strong>. Your order is now confirmed and will be processed shortly.</p>
+
+        ${items.length > 0 ? `
+        <h3 style="color:#111;margin-top:24px;margin-bottom:12px;font-size:15px">Order Summary</h3>
+        <table style="width:100%;border-collapse:collapse;font-size:14px">
+          <thead>
+            <tr style="background:#f9fafb">
+              <th style="text-align:left;padding:10px 12px;border-bottom:2px solid #e5e7eb;color:#374151">Item</th>
+              <th style="text-align:center;padding:10px 12px;border-bottom:2px solid #e5e7eb;color:#374151">Qty</th>
+              <th style="text-align:right;padding:10px 12px;border-bottom:2px solid #e5e7eb;color:#374151">Price</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${items.map((i) => `
+            <tr>
+              <td style="padding:10px 12px;border-bottom:1px solid #f3f4f6;color:#111">${i.name}</td>
+              <td style="padding:10px 12px;border-bottom:1px solid #f3f4f6;color:#111;text-align:center">${i.quantity}</td>
+              <td style="padding:10px 12px;border-bottom:1px solid #f3f4f6;color:#111;text-align:right">KES ${(i.price * i.quantity).toLocaleString('en-KE', { minimumFractionDigits: 2 })}</td>
+            </tr>`).join('')}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colspan="2" style="padding:12px 12px 4px;font-weight:700;color:#111;text-align:right">Total Paid:</td>
+              <td style="padding:12px 12px 4px;font-weight:700;font-size:16px;color:#15803d;text-align:right">KES ${total.toLocaleString('en-KE', { minimumFractionDigits: 2 })}</td>
+            </tr>
+          </tfoot>
+        </table>` : `
+        <p style="font-size:20px;font-weight:700;color:#15803d">Total Paid: KES ${total.toLocaleString('en-KE', { minimumFractionDigits: 2 })}</p>`}
+
+        <p style="margin-top:24px">We'll send you another email when your order ships with tracking details.</p>
+
+        <a href="${env.FRONTEND_URL}/account/orders" style="display:inline-block;padding:12px 28px;background:#15803d;color:#fff;text-decoration:none;border-radius:8px;margin-top:16px;font-weight:600">
+          Track Your Order →
+        </a>
+
+        <hr style="border:none;border-top:1px solid #e5e7eb;margin:32px 0" />
+        <p style="color:#9ca3af;font-size:12px">
+          Order reference: <strong>${orderNumber}</strong><br />
+          If you have any questions, reply to this email or visit our help centre.
+        </p>
+      </div>`,
+    text: `Payment confirmed for order ${orderNumber}.\n\nTotal paid: KES ${total.toFixed(2)}\n\nTrack your order: ${env.FRONTEND_URL}/account/orders`,
   }),
 
   orderStatusUpdate: (orderNumber: string, status: string, customerName = '') => ({

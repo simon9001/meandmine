@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { supabaseAdmin } from '../config/db.js';
 import { env } from '../config/env.js';
 import { paymentsProcessedTotal } from '../config/metrics.js';
+import { sendEmail, templates } from '../config/email.js';
 import { NotFoundError, BadRequestError, UnprocessableError } from '../utils/errors.js';
 
 const PAYSTACK_BASE = 'https://api.paystack.co';
@@ -19,6 +20,133 @@ async function paystackRequest(path: string, method = 'GET', body?: Record<strin
   if (!json.status) throw new UnprocessableError(json.message ?? 'Paystack error');
   return json.data;
 }
+
+// ─── Shared post-payment logic ────────────────────────────────────────────────
+// Called by both verifyPayment (frontend path) and handleWebhook (Paystack push).
+// Guaranteed idempotent by the caller's 'already paid' guard.
+
+async function handlePaymentConfirmed(opts: {
+  paymentId: string;
+  orderId: string;
+  userId: string;
+  paidAt: string;
+  providerData?: Record<string, unknown>;
+  paymentMethod?: string;
+}) {
+  const { paymentId, orderId, userId, paidAt, providerData, paymentMethod } = opts;
+
+  // Update payment record
+  await supabaseAdmin.from('payments').update({
+    status:         'paid',
+    provider_data:  providerData,
+    paid_at:        paidAt,
+    payment_method: paymentMethod,
+  }).eq('id', paymentId);
+
+  // Confirm the order
+  await supabaseAdmin.from('orders').update({
+    payment_status: 'paid',
+    status:         'confirmed',
+    paid_at:        paidAt,
+  }).eq('id', orderId);
+
+  // Fetch order details (number, total, line items) for inventory + email
+  const { data: orderData } = await supabaseAdmin
+    .from('orders')
+    .select('order_number, total_amount, order_items(product_name, product_id, variant_id, quantity, unit_price)')
+    .eq('id', orderId)
+    .single();
+
+  // Decrement inventory for each confirmed item
+  if (orderData) {
+    type RawItem = { product_id: string; variant_id: string | null; quantity: number };
+    const orderItems = (orderData as unknown as { order_items: RawItem[] }).order_items ?? [];
+
+    for (const item of orderItems) {
+      try {
+        const { data: inv } = await supabaseAdmin
+          .from('inventory')
+          .select('id, available_stock')
+          .eq('product_id', item.product_id)
+          .is('variant_id', item.variant_id ?? null)
+          .maybeSingle();
+
+        if (inv) {
+          const newStock = Math.max(
+            0,
+            (inv as { id: string; available_stock: number }).available_stock - item.quantity,
+          );
+          await supabaseAdmin
+            .from('inventory')
+            .update({ available_stock: newStock })
+            .eq('id', (inv as { id: string }).id);
+        }
+      } catch {
+        // Inventory decrement is non-critical — log and continue
+      }
+    }
+  }
+
+  // Clear the user's cart now that the order is paid
+  try {
+    const { data: cart } = await supabaseAdmin
+      .from('carts')
+      .select('id')
+      .eq('user_id', userId)
+      .gt('expires_at', new Date().toISOString())
+      .maybeSingle();
+
+    if (cart) {
+      await supabaseAdmin.from('cart_items').delete().eq('cart_id', (cart as { id: string }).id);
+    }
+  } catch {
+    // Cart clearing is non-critical
+  }
+
+  // Send payment-confirmed email (non-blocking — never throws)
+  try {
+    const { data: authUser } = await supabaseAdmin.auth.admin.getUserById(userId);
+    const { data: profile } = await supabaseAdmin
+      .from('user_profiles')
+      .select('first_name, last_name')
+      .eq('id', userId)
+      .maybeSingle();
+
+    const email = authUser.user?.email;
+    if (email && orderData) {
+      const name = profile
+        ? `${(profile as { first_name: string }).first_name} ${(profile as { last_name: string }).last_name}`.trim()
+        : '';
+
+      type RawItem = { product_name: string; quantity: number; unit_price: number };
+      const od = orderData as unknown as {
+        order_number: string;
+        total_amount: number;
+        order_items: RawItem[];
+      };
+
+      sendEmail({
+        to: [{ email, name }],
+        ...templates.paymentConfirmed(
+          od.order_number,
+          od.total_amount,
+          name,
+          (od.order_items ?? []).map((i) => ({
+            name:     i.product_name,
+            quantity: i.quantity,
+            price:    i.unit_price,
+          })),
+        ),
+      }).catch(() => {});
+    }
+  } catch {
+    // Email failure must never break the payment confirmation response
+  }
+
+  paymentsProcessedTotal.inc({ provider: 'paystack', status: 'paid' });
+}
+
+// ─── Public service functions ─────────────────────────────────────────────────
 
 export async function initializePayment(userId: string, orderId: string) {
   const { data: order } = await supabaseAdmin
@@ -47,16 +175,15 @@ export async function initializePayment(userId: string, orderId: string) {
     callback_url: `${env.FRONTEND_URL}/orders/${orderId}/confirm`,
   }) as { reference: string; authorization_url: string; access_code: string };
 
-  // Record pending payment
   await supabaseAdmin.from('payments').insert({
-    order_id:          orderId,
-    user_id:           userId,
-    provider:          'paystack',
-    provider_ref:      data.reference,
-    amount:            (order as { total_amount: number }).total_amount,
-    currency:          'KES',
-    status:            'pending',
-    checkout_url:      data.authorization_url,
+    order_id:     orderId,
+    user_id:      userId,
+    provider:     'paystack',
+    provider_ref: data.reference,
+    amount:       (order as { total_amount: number }).total_amount,
+    currency:     'KES',
+    status:       'pending',
+    checkout_url: data.authorization_url,
   });
 
   return { authorizationUrl: data.authorization_url, reference: data.reference };
@@ -74,7 +201,10 @@ export async function verifyPayment(reference: string, userId: string) {
     .select('id, order_id, amount, status, user_id')
     .eq('provider_ref', reference)
     .single();
+
   if (!payment || (payment as { user_id: string }).user_id !== userId) throw new NotFoundError('Payment');
+
+  // Idempotent — already processed
   if ((payment as { status: string }).status === 'paid') return payment;
 
   if (data.status !== 'success') {
@@ -86,20 +216,15 @@ export async function verifyPayment(reference: string, userId: string) {
   const expectedKobo = Math.round((payment as { amount: number }).amount * 100);
   if (data.amount < expectedKobo) throw new UnprocessableError('Amount mismatch — possible fraud');
 
-  await supabaseAdmin.from('payments').update({
-    status:          'paid',
-    provider_data:   data,
-    paid_at:         data.paid_at,
-    payment_method:  data.authorization?.channel,
-  }).eq('id', (payment as { id: string }).id);
+  await handlePaymentConfirmed({
+    paymentId:     (payment as { id: string }).id,
+    orderId:       (payment as { order_id: string }).order_id,
+    userId,
+    paidAt:        data.paid_at,
+    providerData:  data as unknown as Record<string, unknown>,
+    paymentMethod: data.authorization?.channel,
+  });
 
-  await supabaseAdmin.from('orders').update({
-    payment_status: 'paid',
-    status:         'confirmed',
-    paid_at:        data.paid_at,
-  }).eq('id', (payment as { order_id: string }).order_id);
-
-  paymentsProcessedTotal.inc({ provider: 'paystack', status: 'paid' });
   return payment;
 }
 
@@ -114,21 +239,26 @@ export async function handleWebhook(rawBody: string, signature: string) {
 
   if (event.event === 'charge.success') {
     const ref = event.data.reference as string;
+
     const { data: payment } = await supabaseAdmin
-      .from('payments').select('id, order_id, amount, status').eq('provider_ref', ref).maybeSingle();
+      .from('payments')
+      .select('id, order_id, amount, status, user_id')
+      .eq('provider_ref', ref)
+      .maybeSingle();
+
+    // Unknown ref or already processed — acknowledge and exit
     if (!payment || (payment as { status: string }).status === 'paid') return { received: true };
 
     const paidAt = (event.data.paid_at ?? new Date().toISOString()) as string;
-    await supabaseAdmin.from('payments').update({
-      status: 'paid', paid_at: paidAt, provider_data: event.data,
-      payment_method: (event.data.authorization as { channel: string } | undefined)?.channel,
-    }).eq('id', (payment as { id: string }).id);
 
-    await supabaseAdmin.from('orders').update({
-      payment_status: 'paid', status: 'confirmed', paid_at: paidAt,
-    }).eq('id', (payment as { order_id: string }).order_id);
-
-    paymentsProcessedTotal.inc({ provider: 'paystack', status: 'paid' });
+    await handlePaymentConfirmed({
+      paymentId:     (payment as { id: string }).id,
+      orderId:       (payment as { order_id: string }).order_id,
+      userId:        (payment as { user_id: string }).user_id,
+      paidAt,
+      providerData:  event.data,
+      paymentMethod: (event.data.authorization as { channel: string } | undefined)?.channel,
+    });
   }
 
   return { received: true };

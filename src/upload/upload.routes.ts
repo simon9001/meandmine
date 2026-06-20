@@ -11,5 +11,6 @@ router.post('/category',           requireAuth, requireAdmin, ctrl.uploadCategor
 router.post('/avatar',             requireAuth,               ctrl.uploadAvatarImage);
 router.post('/promotion',          requireAuth, requireAdmin, ctrl.uploadPromotionImage);
 router.post('/review/:reviewId',   requireAuth,               ctrl.uploadReviewImage);
+router.delete('/image',            requireAuth, requireAdmin, ctrl.deleteUploadedImage);
 
 export default router;

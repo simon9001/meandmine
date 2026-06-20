@@ -36,8 +36,11 @@ app.use('*', trimTrailingSlash());
 
 app.use('*', cors({
   origin: (origin) => {
+    if (!origin) return '';
     const allowed = env.CORS_ORIGINS.split(',').map(o => o.trim());
-    if (!origin || allowed.includes('*') || allowed.includes(origin)) return origin ?? '';
+    if (allowed.includes('*') || allowed.includes(origin)) return origin;
+    // Allow all Vercel preview deployments for this project
+    if (/^https:\/\/meandminefront[^.]*\.vercel\.app$/.test(origin)) return origin;
     return '';
   },
   allowMethods:  ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
