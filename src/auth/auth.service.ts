@@ -187,22 +187,11 @@ export async function login(email: string, password: string) {
   return data.session;
 }
 
-async function incrementFailedLogin(email: string) {
-  const { data: { users } } = await supabaseAdmin.auth.admin.listUsers({ perPage: 10000 });
-  const authUser = users.find((u) => u.email === email);
-  if (!authUser) return;
-
-  const { data: profile } = await supabaseAdmin
-    .from('user_profiles')
-    .select('id')
-    .eq('id', authUser.id)
-    .maybeSingle();
-  if (!profile) return;
-
-  await supabaseAdmin
-    .from('user_profiles')
-    .update({ last_login_at: null })
-    .eq('id', authUser.id);
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+async function incrementFailedLogin(_email: string) {
+  // Placeholder: track brute-force attempts here once a failed_login_count
+  // column is added to user_profiles. The previous implementation incorrectly
+  // nulled last_login_at and fetched all users, which was both wrong and slow.
 }
 
 // ─── Logout ───────────────────────────────────────────────────────────────────

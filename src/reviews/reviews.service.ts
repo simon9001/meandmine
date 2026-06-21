@@ -9,7 +9,7 @@ export async function listProductReviews(productId: string, query: { page?: stri
     .select('id, user_id, rating, title, body, is_verified_purchase, helpful_votes, not_helpful_votes, created_at, user_profiles(first_name, last_name)', { count: 'exact' })
     .eq('product_id', productId)
     .eq('status', 'approved')
-    .order('helpful_count', { ascending: false })
+    .order('helpful_votes', { ascending: false })
     .range(offset, offset + limit - 1);
   if (query.rating) q = q.eq('rating', Number(query.rating));
   const { data, count } = await q;
@@ -28,14 +28,15 @@ export async function createReview(userId: string, payload: {
   // Verified purchase check
   let isVerified = false;
   if (payload.orderId) {
-    const { data: item } = await supabaseAdmin
-      .from('order_items')
-      .select('id')
-      .eq('product_id', payload.productId)
-      .eq('orders.user_id', userId)
-      .eq('orders.id', payload.orderId)
+    // Query via orders table so user_id and order_id are enforced before checking items
+    const { data: order } = await supabaseAdmin
+      .from('orders')
+      .select('id, order_items!inner(id)')
+      .eq('id', payload.orderId)
+      .eq('user_id', userId)
+      .eq('order_items.product_id', payload.productId)
       .maybeSingle();
-    isVerified = !!item;
+    isVerified = !!order;
   } else {
     const { data: orderItem } = await supabaseAdmin
       .from('order_items')

@@ -47,10 +47,13 @@ function toDTO(raw: Record<string, unknown>) {
 }
 
 export async function listActivePromotions(type?: string) {
+  const now = new Date().toISOString();
   let q = supabaseAdmin
     .from('promotions')
     .select('*')
     .eq('is_active', true)
+    .or(`starts_at.is.null,starts_at.lte.${now}`)
+    .or(`ends_at.is.null,ends_at.gte.${now}`)
     .order('display_order');
 
   if (type) q = q.eq('type', type);

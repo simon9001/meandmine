@@ -167,10 +167,11 @@ export async function createOrder(userId: string, payload: CheckoutPayload, _ip?
 
   if (orderErr || !order) throw new BadRequestError(orderErr?.message ?? 'Order creation failed');
 
-  // Insert order items
-  for (const item of lineItems) {
-    await supabaseAdmin.from('order_items').insert({
-      order_id:        (order as { id: string }).id,
+  // Bulk-insert order items in one round-trip
+  const orderId = (order as { id: string }).id;
+  await supabaseAdmin.from('order_items').insert(
+    lineItems.map((item) => ({
+      order_id:        orderId,
       product_id:      item.productId,
       variant_id:      item.variantId ?? null,
       supply_id:       item.supplyId ?? null,
@@ -181,23 +182,32 @@ export async function createOrder(userId: string, payload: CheckoutPayload, _ip?
       quantity:        item.quantity,
       unit_price:      item.unitPrice,
       unit_cost:       item.unitCost,
-    });
-  }
+    }))
+  );
 
   // Increment discount usage
   if (discountCodeId) {
     await supabaseAdmin.from('discount_usage').insert({
-      discount_id: discountCodeId, user_id: userId, order_id: (order as { id: string }).id,
+      discount_id: discountCodeId, user_id: userId, order_id: orderId,
       discount_amount: discountAmount,
     });
-    await supabaseAdmin.from('discount_codes').update({
-      current_uses: supabaseAdmin.rpc('increment' as never, { row_id: discountCodeId })
-    } as Record<string, unknown>).eq('id', discountCodeId);
+    // Fetch current count and increment atomically
+    const { data: dcRow } = await supabaseAdmin
+      .from('discount_codes')
+      .select('current_uses')
+      .eq('id', discountCodeId)
+      .single();
+    if (dcRow) {
+      await supabaseAdmin
+        .from('discount_codes')
+        .update({ current_uses: ((dcRow as { current_uses: number }).current_uses ?? 0) + 1 })
+        .eq('id', discountCodeId);
+    }
   }
 
   // Record initial status in history
   await supabaseAdmin.from('order_status_history').insert({
-    order_id:    (order as { id: string }).id,
+    order_id:    orderId,
     from_status: null,
     to_status:   'pending_payment',
     changed_at:  new Date().toISOString(),
@@ -426,6 +436,7 @@ export async function createGuestOrder(payload: GuestCheckoutPayload) {
         recipientName:  payload.customerName,
         phone:          payload.phone,
         email:          payload.email ?? null,
+        address:        payload.address,
         town:           payload.zone === 'nairobi' ? 'Nairobi' : 'Upcountry',
         county:         'Kenya',
         deliveryMethod: 'home_delivery',

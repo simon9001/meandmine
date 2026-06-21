@@ -1,6 +1,7 @@
 import { supabaseAdmin } from '../config/db.js';
 import { NotFoundError, BadRequestError, ConflictError } from '../utils/errors.js';
 import { deleteImage } from '../upload/upload.service.js';
+import { logger } from '../config/logger.js';
 
 function extractCloudinaryPublicId(url: string): string | null {
   try {
@@ -119,7 +120,7 @@ export async function listProducts(filters: ProductFilters) {
 
   const { data, error, count } = await q;
   if (error) {
-    console.error('[listProducts] Supabase error:', error.message, error.details, error.hint);
+    logger.error('[listProducts] Supabase error', { message: error.message, details: error.details, hint: error.hint });
     throw new BadRequestError(error.message);
   }
 
@@ -272,7 +273,7 @@ export async function createProduct(payload: {
   }).select().single();
 
   if (error || !data) {
-    console.error('[createProduct] Supabase error:', error?.message, error?.details, error?.hint);
+    logger.error('[createProduct] Supabase error', { message: error?.message, details: error?.details, hint: error?.hint });
     throw new BadRequestError(error?.message ?? 'Create failed');
   }
   return data;
