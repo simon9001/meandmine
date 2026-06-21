@@ -62,7 +62,8 @@ export async function createOrder(userId: string, payload: CheckoutPayload, _ip?
       .single();
     if (error || !product) throw new UnprocessableError(`Product ${item.productId} not available`);
 
-    let unitPrice = Number((product as { sale_price: number | null; base_price: number }).sale_price ?? (product as { base_price: number }).base_price);
+    const p = product as { sale_price: number | null; base_price: number };
+    let unitPrice = (p.sale_price && p.sale_price > 0) ? Number(p.sale_price) : Number(p.base_price);
     let variantOptions: Record<string, unknown> | undefined;
 
     if (item.variantId) {

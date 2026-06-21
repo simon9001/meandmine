@@ -6,6 +6,8 @@ import type { AppEnv } from '../types/index.js';
 const router = new Hono<AppEnv>();
 
 router.post('/initialize',               requireAuth, ctrl.initializePayment);
+router.post('/charge/mpesa',             requireAuth, ctrl.chargeMpesa);
+router.get('/status/:reference',         requireAuth, ctrl.checkPaymentStatus);
 router.get('/verify/:reference',         requireAuth, ctrl.verifyPayment);
 router.get('/order/:orderId',            requireAuth, ctrl.getPaymentForOrder);
 router.post('/webhook/paystack',                      ctrl.handleWebhook);

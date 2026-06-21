@@ -193,7 +193,7 @@ export async function initializePayment(userId: string, orderId: string) {
     checkout_url: data.authorization_url,
   });
 
-  return { authorizationUrl: data.authorization_url, reference: data.reference };
+  return { authorizationUrl: data.authorization_url, reference: data.reference, accessCode: data.access_code };
 }
 
 export async function verifyPayment(reference: string, userId: string) {
@@ -269,6 +269,91 @@ export async function handleWebhook(rawBody: string, signature: string) {
   }
 
   return { received: true };
+}
+
+export async function chargeMpesa(userId: string, orderId: string, phone: string) {
+  const { data: order } = await supabaseAdmin
+    .from('orders')
+    .select('id, order_number, total_amount, payment_status, user_id')
+    .eq('id', orderId)
+    .eq('user_id', userId)
+    .single();
+  if (!order) throw new NotFoundError('Order');
+  const ord = order as { id: string; order_number: string; total_amount: number; payment_status: string };
+  if (ord.payment_status === 'paid') throw new BadRequestError('Order already paid');
+
+  const { data: authUser } = await supabaseAdmin.auth.admin.getUserById(userId);
+  const email = authUser.user?.email;
+  if (!email) throw new BadRequestError('User email not found');
+
+  const amountKobo = Math.round(ord.total_amount * 100);
+  const reference  = `ORD-${ord.order_number}-${Date.now()}`;
+
+  // Normalize to E.164 Kenya format required by Paystack: +2547XXXXXXXX
+  const normalized = phone.startsWith('+254') ? phone :
+                     phone.startsWith('254')   ? `+${phone}` :
+                     phone.startsWith('0')     ? `+254${phone.slice(1)}` :
+                                                 `+254${phone}`;
+
+  const data = await paystackRequest('/charge', 'POST', {
+    email,
+    amount:       amountKobo,
+    currency:     'KES',
+    reference,
+    mobile_money: { phone: normalized, provider: 'mpesa' },
+    metadata:     { order_id: orderId, user_id: userId, order_number: ord.order_number },
+  }) as { reference: string; status: string };
+
+  await supabaseAdmin.from('payments').insert({
+    order_id:     orderId,
+    user_id:      userId,
+    provider:     'paystack',
+    provider_ref: data.reference,
+    amount:       ord.total_amount,
+    currency:     'KES',
+    status:       'pending',
+  });
+
+  return { reference: data.reference, status: data.status };
+}
+
+export async function checkPaymentStatus(reference: string, userId: string) {
+  const { data: payment } = await supabaseAdmin
+    .from('payments')
+    .select('id, order_id, amount, status, user_id')
+    .eq('provider_ref', reference)
+    .single();
+
+  if (!payment || (payment as { user_id: string }).user_id !== userId) throw new NotFoundError('Payment');
+
+  if ((payment as { status: string }).status === 'paid') return { status: 'success' as const };
+
+  const data = await paystackRequest(`/charge/${encodeURIComponent(reference)}`) as {
+    status: string;
+    paid_at?: string;
+    authorization?: { channel: string };
+  };
+
+  if (data.status === 'success') {
+    await handlePaymentConfirmed({
+      paymentId:     (payment as { id: string }).id,
+      orderId:       (payment as { order_id: string }).order_id,
+      userId,
+      paidAt:        data.paid_at ?? new Date().toISOString(),
+      providerData:  data as unknown as Record<string, unknown>,
+      paymentMethod: data.authorization?.channel ?? 'mobile_money',
+    });
+    return { status: 'success' as const };
+  }
+
+  const FAILED = new Set(['failed', 'timeout', 'reversed', 'cancelled']);
+  if (FAILED.has(data.status)) {
+    await supabaseAdmin.from('payments').update({ status: 'failed' }).eq('id', (payment as { id: string }).id);
+    paymentsProcessedTotal.inc({ provider: 'paystack', status: 'failed' });
+    return { status: 'failed' as const };
+  }
+
+  return { status: 'pending' as const };
 }
 
 export async function getPaymentForOrder(orderId: string, userId: string) {
