@@ -89,17 +89,18 @@ export async function dispatchOrder(c: Context<AppEnv>) {
 
 const guestCheckoutSchema = z.object({
   items: z.array(z.object({
-    name:     z.string().min(1),
-    price:    z.number().min(0),
-    quantity: z.number().int().min(1),
-  })).min(1),
-  customerName: z.string().min(2),
-  phone:        z.string().min(9).max(13),
+    productId: z.string().uuid().optional(),
+    name:      z.string().min(1),
+    price:     z.number().min(1),          // min 1 prevents zero-price abuse for bespoke items
+    quantity:  z.number().int().min(1).max(100),
+  })).min(1).max(50),
+  customerName: z.string().min(2).max(100),
+  phone:        z.string().min(9).max(15),
   email:        z.string().email().optional().or(z.literal('')),
-  address:      z.string().min(5),
+  address:      z.string().min(5).max(500),
   zone:         z.enum(['nairobi', 'upcountry']),
   payment:      z.enum(['mpesa', 'cod']),
-  shippingFee:  z.number().min(0),
+  shippingFee:  z.number().min(0).max(10000),
 });
 
 export async function createGuestOrder(c: Context<AppEnv>) {

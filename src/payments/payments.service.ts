@@ -256,6 +256,13 @@ export async function handleWebhook(rawBody: string, signature: string) {
     // Unknown ref or already processed — acknowledge and exit
     if (!payment || (payment as { status: string }).status === 'paid') return { received: true };
 
+    // Verify Paystack's reported amount matches what we recorded at payment init
+    const reportedKobo  = event.data.amount as number;
+    const expectedKobo  = Math.round((payment as { amount: number }).amount * 100);
+    if (reportedKobo < expectedKobo) {
+      throw new BadRequestError(`Webhook amount mismatch: expected ${expectedKobo} kobo, got ${reportedKobo}`);
+    }
+
     const paidAt = (event.data.paid_at ?? new Date().toISOString()) as string;
 
     await handlePaymentConfirmed({

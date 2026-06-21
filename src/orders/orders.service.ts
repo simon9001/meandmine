@@ -250,14 +250,15 @@ export async function adminListOrders(query: {
       id, order_number, user_id, status, payment_status,
       subtotal, shipping_fee, discount_amount, total_amount,
       currency, placed_at, customer_note, shipping_address, metadata,
-      order_items(id, product_id, product_name, quantity, unit_price, total_price, fulfillment_status)
+      user_profiles(first_name, last_name)
     `, { count: 'exact' })
     .order('placed_at', { ascending: false })
     .range(offset, offset + limit - 1);
   if (query.status)        q = q.eq('status', query.status);
   if (query.paymentStatus) q = q.eq('payment_status', query.paymentStatus);
   if (query.userId)        q = q.eq('user_id', query.userId);
-  const { data, count } = await q;
+  const { data, count, error } = await q;
+  if (error) throw new BadRequestError(`Orders query failed: ${error.message}`);
   return { data: data ?? [], meta: { total: count ?? 0, page, limit } };
 }
 
@@ -407,9 +408,10 @@ export async function dispatchOrder(orderId: string, info: {
 // ─── Guest checkout (no auth required) ───────────────────────────────────────
 
 export interface GuestOrderItem {
-  name:     string;
-  price:    number;
-  quantity: number;
+  productId?: string;
+  name:       string;
+  price:      number;  // used only when productId is absent (bespoke/phone orders)
+  quantity:   number;
 }
 
 export interface GuestCheckoutPayload {
@@ -424,7 +426,32 @@ export interface GuestCheckoutPayload {
 }
 
 export async function createGuestOrder(payload: GuestCheckoutPayload) {
-  const subtotal    = payload.items.reduce((s, i) => s + i.price * i.quantity, 0);
+  // Resolve each item's unit price: if productId is supplied, re-fetch from DB
+  // to prevent client-side price manipulation. Fall back to client price only
+  // for bespoke/phone-order items that have no product record.
+  type ResolvedItem = { productId?: string; name: string; resolvedPrice: number; quantity: number };
+  const resolvedItems: ResolvedItem[] = [];
+
+  for (const item of payload.items) {
+    let resolvedPrice = item.price;
+
+    if (item.productId) {
+      const { data: product } = await supabaseAdmin
+        .from('products')
+        .select('base_price, sale_price, name, status')
+        .eq('id', item.productId)
+        .eq('status', 'active')
+        .maybeSingle();
+
+      if (!product) throw new UnprocessableError(`Product ${item.productId} not available`);
+      const p = product as { sale_price: number | null; base_price: number; name: string };
+      resolvedPrice = (p.sale_price && p.sale_price > 0) ? Number(p.sale_price) : Number(p.base_price);
+    }
+
+    resolvedItems.push({ productId: item.productId, name: item.name, resolvedPrice, quantity: item.quantity });
+  }
+
+  const subtotal    = resolvedItems.reduce((s, i) => s + i.resolvedPrice * i.quantity, 0);
   const totalAmount = subtotal + payload.shippingFee;
   const guestOrderNumber = `ORD-${new Date().getFullYear()}-${Date.now().toString(36).toUpperCase()}`;
 
@@ -460,14 +487,15 @@ export async function createGuestOrder(payload: GuestCheckoutPayload) {
 
   const orderId = (order as { id: string }).id;
 
-  for (const item of payload.items) {
-    await supabaseAdmin.from('order_items').insert({
+  await supabaseAdmin.from('order_items').insert(
+    resolvedItems.map((item) => ({
       order_id:     orderId,
+      product_id:   item.productId ?? null,
       product_name: item.name,
       quantity:     item.quantity,
-      unit_price:   item.price,
-    });
-  }
+      unit_price:   item.resolvedPrice,
+    }))
+  );
 
   ordersCreatedTotal.inc({ status: 'pending_payment' });
 
