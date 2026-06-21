@@ -32,7 +32,7 @@ function setAuthCookies(
   c: Context<AppEnv>,
   session: { access_token: string; refresh_token: string; expires_in?: number },
 ) {
-  const base = { httpOnly: true, secure: isProd, sameSite: 'Strict' as const, path: '/' };
+  const base = { httpOnly: true, secure: isProd, sameSite: (isProd ? 'None' : 'Lax') as 'None' | 'Lax', path: '/' };
   setCookie(c, 'access_token',  session.access_token,  { ...base, maxAge: session.expires_in ?? 3600 });
   setCookie(c, 'refresh_token', session.refresh_token, { ...base, maxAge: 60 * 60 * 24 * 7 });
 }
