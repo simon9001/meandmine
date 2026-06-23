@@ -2,6 +2,13 @@ import { supabaseAdmin } from '../config/db.js';
 import { NotFoundError, BadRequestError, ConflictError } from '../utils/errors.js';
 import { deleteImage } from '../upload/upload.service.js';
 import { logger } from '../config/logger.js';
+import { buildKey, cacheGet, cacheSet, cacheDel, cacheDelPattern } from '../utils/cache.js';
+
+const TTL = {
+  productList:   120,   // 2 min  — listings refresh quickly
+  productSlug:   300,   // 5 min  — detail pages
+  categorySlugId: 1800, // 30 min — slug→id mapping almost never changes
+};
 
 function extractCloudinaryPublicId(url: string): string | null {
   try {
@@ -60,6 +67,7 @@ function toProductDTO(raw: Record<string, unknown>) {
     shortDescription:     raw.short_description ?? undefined,
     basePrice:            raw.base_price,
     salePrice:            raw.sale_price ?? undefined,
+    showSalePrice:        raw.show_sale_price ?? false,
     currency:             raw.currency,
     status:               raw.status,
     primaryImageUrl:      primaryMedia?.url ?? undefined,
@@ -80,10 +88,15 @@ export async function listProducts(filters: ProductFilters) {
   const { page, limit, offset } = parsePage(filters);
   const { col: sortCol, asc: ascending } = resolveSortCol(filters.sort, filters.order);
 
+  // Cache key covers every filter dimension
+  const key = buildKey('products:list', filters);
+  const cached = await cacheGet<{ data: ReturnType<typeof toProductDTO>[]; meta: { total: number; page: number; limit: number } }>(key);
+  if (cached) return cached;
+
   let q = supabaseAdmin
     .from('products')
     .select(
-      `id, name, slug, short_description, base_price, sale_price, currency, status,
+      `id, name, slug, short_description, base_price, sale_price, show_sale_price, currency, status,
        is_featured, is_new_arrival, is_best_seller, average_rating, review_count,
        order_count, stock_warning_threshold, tags, created_at,
        categories(id, name, slug),
@@ -92,7 +105,6 @@ export async function listProducts(filters: ProductFilters) {
       { count: 'exact' }
     );
 
-  // 'all' = no filter (admin view); otherwise default to 'active' for public storefront
   if (filters.status && filters.status !== 'all') {
     q = q.eq('status', filters.status);
   } else if (!filters.status) {
@@ -107,13 +119,19 @@ export async function listProducts(filters: ProductFilters) {
   if (filters.featured   === 'true') q = q.eq('is_featured',   true);
   if (filters.newArrival === 'true') q = q.eq('is_new_arrival', true);
 
-  // Accept 'category' (frontend) as alias for 'categorySlug'
+  // Cache the slug→id lookup so repeated category filter requests skip the extra DB round-trip
   const catSlug = filters.categorySlug ?? filters.category;
   if (catSlug) {
-    const { data: cat } = await supabaseAdmin
-      .from('categories').select('id').eq('slug', catSlug).single();
-    if (cat) q = q.eq('category_id', (cat as { id: string }).id);
-    else return { data: [], meta: { total: 0, page, limit } };
+    const idKey = buildKey('categories:id', catSlug);
+    let catId = await cacheGet<string>(idKey);
+    if (!catId) {
+      const { data: cat } = await supabaseAdmin
+        .from('categories').select('id').eq('slug', catSlug).single();
+      if (!cat) return { data: [], meta: { total: 0, page, limit } };
+      catId = (cat as { id: string }).id;
+      await cacheSet(idKey, catId, TTL.categorySlugId);
+    }
+    q = q.eq('category_id', catId);
   }
 
   q = q.order(sortCol, { ascending }).range(offset, offset + limit - 1);
@@ -121,16 +139,27 @@ export async function listProducts(filters: ProductFilters) {
   const { data, error, count } = await q;
   if (error) {
     logger.error('[listProducts] Supabase error', { message: error.message, details: error.details, hint: error.hint });
-    throw new BadRequestError(error.message);
+    throw new BadRequestError('Could not fetch products');
   }
 
-  return {
+  const result = {
     data: (data ?? []).map((row) => toProductDTO(row as Record<string, unknown>)),
     meta: { total: count ?? 0, page, limit },
   };
+
+  // Skip caching search results (too unique to be reused) and admin full-table views
+  if (!filters.search && filters.status !== 'all') {
+    await cacheSet(key, result, TTL.productList);
+  }
+
+  return result;
 }
 
 export async function getProductBySlug(slug: string) {
+  const key = buildKey('products:slug', slug);
+  const cached = await cacheGet<ReturnType<typeof buildProductDetail>>(key);
+  if (cached) return cached;
+
   const { data, error } = await supabaseAdmin
     .from('v_product_page')
     .select('*')
@@ -140,31 +169,33 @@ export async function getProductBySlug(slug: string) {
 
   const raw = data as Record<string, unknown>;
 
-  // Fetch media
-  const { data: media } = await supabaseAdmin
-    .from('product_media')
-    .select('id, media_type, url, thumbnail_url, alt_text, display_order, is_primary')
-    .eq('product_id', raw.id)
-    .order('display_order');
+  // Fetch all supplementary data in parallel (was 3 sequential round-trips)
+  const [mediaRes, variantsRes, badgesRes] = await Promise.all([
+    supabaseAdmin
+      .from('product_media')
+      .select('id, media_type, url, thumbnail_url, alt_text, display_order, is_primary, variant_id')
+      .eq('product_id', raw.id)
+      .order('display_order'),
+    supabaseAdmin
+      .from('product_variants')
+      .select('id, sku, name, options, additional_price, stock_quantity, is_active')
+      .eq('product_id', raw.id)
+      .eq('is_active', true),
+    supabaseAdmin
+      .from('product_trust_badges')
+      .select('badge_id, display_order, trust_badges(name, icon_url, description)')
+      .eq('product_id', raw.id)
+      .order('display_order'),
+  ]);
 
-  // Fetch variants
-  const { data: variants } = await supabaseAdmin
-    .from('product_variants')
-    .select('id, sku, name, options, additional_price, stock_quantity, is_active')
-    .eq('product_id', raw.id)
-    .eq('is_active', true);
+  const result = buildProductDetail(raw, mediaRes.data ?? [], variantsRes.data, badgesRes.data);
+  await cacheSet(key, result, TTL.productSlug);
+  return result;
+}
 
-  // Fetch trust badges
-  const { data: badges } = await supabaseAdmin
-    .from('product_trust_badges')
-    .select('badge_id, display_order, trust_badges(name, icon_url, description)')
-    .eq('product_id', raw.id)
-    .order('display_order');
-
-  const mediaList = media ?? [];
-  const primaryMedia = mediaList.find((m) => m.is_primary) ?? mediaList[0];
-
-  // Transform snake_case view columns to camelCase DTO
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildProductDetail(raw: Record<string, unknown>, mediaList: any[], variants: any[] | null, badges: any[] | null) {
+  const primaryMedia = mediaList.find((m: { is_primary: boolean }) => m.is_primary) ?? mediaList[0];
   return {
     id:                    raw.id,
     name:                  raw.name,
@@ -176,7 +207,7 @@ export async function getProductBySlug(slug: string) {
     showSalePrice:         raw.show_sale_price    ?? false,
     currency:              raw.currency            ?? 'KES',
     status:                raw.status,
-    primaryImageUrl:       primaryMedia?.url       ?? raw.primary_image_url ?? undefined,
+    primaryImageUrl:       (primaryMedia?.url as string | undefined) ?? raw.primary_image_url ?? undefined,
     isFeatured:            raw.is_featured         ?? false,
     isNewArrival:          raw.is_new_arrival      ?? false,
     isBestSeller:          raw.is_best_seller      ?? false,
@@ -185,7 +216,6 @@ export async function getProductBySlug(slug: string) {
     orderCount:            Number(raw.order_count    ?? 0),
     stockWarningThreshold: Number(raw.stock_warning_threshold ?? 5),
     tags:                  raw.tags  ?? [],
-    // v_product_page may expose category as nested object or flat columns
     category: (() => {
       const nested = raw.categories as { id: string; name: string; slug: string } | null;
       if (nested?.id) return { id: nested.id, name: nested.name, slug: nested.slug };
@@ -196,28 +226,29 @@ export async function getProductBySlug(slug: string) {
       };
       return undefined;
     })(),
-    media:    mediaList.map((m) => ({
-      id:           m.id,
-      url:          m.url,
-      thumbnailUrl: m.thumbnail_url  ?? undefined,
-      altText:      m.alt_text       ?? undefined,
-      mediaType:    m.media_type,
-      isPrimary:    m.is_primary,
-      displayOrder: m.display_order,
+    media: mediaList.map((m) => ({
+      id:           m.id as string,
+      url:          m.url as string,
+      thumbnailUrl: (m.thumbnail_url ?? undefined) as string | undefined,
+      altText:      (m.alt_text      ?? undefined) as string | undefined,
+      mediaType:    m.media_type as string,
+      isPrimary:    m.is_primary as boolean,
+      displayOrder: m.display_order as number,
+      variantId:    (m.variant_id ?? undefined) as string | undefined,
     })),
     variants: (variants ?? []).map((v) => ({
-      id:              v.id,
-      name:            v.name,
-      options:         v.options,
+      id:              v.id as string,
+      name:            v.name as string,
+      options:         v.options as Record<string, string>,
       additionalPrice: Number(v.additional_price ?? 0),
-      isActive:        v.is_active,
-      sku:             v.sku ?? undefined,
+      isActive:        v.is_active as boolean,
+      sku:             (v.sku ?? undefined) as string | undefined,
     })),
     trustBadges: (badges ?? []).map((b) => ({
-      id:          b.badge_id,
-      title:       (b.trust_badges as unknown as { name: string } | null)?.name ?? '',
-      description: (b.trust_badges as unknown as { description?: string } | null)?.description,
-      iconUrl:     (b.trust_badges as unknown as { icon_url?: string } | null)?.icon_url,
+      id:          b.badge_id as string,
+      title:       (b.trust_badges as { name: string } | null)?.name ?? '',
+      description: (b.trust_badges as { description?: string } | null)?.description,
+      iconUrl:     (b.trust_badges as { icon_url?: string } | null)?.icon_url,
     })),
   };
 }
@@ -236,7 +267,7 @@ export async function createProduct(payload: {
   categoryId?: string; brandId?: string; name: string; slug: string; sku?: string;
   shortDescription?: string; fullDescription?: string;
   basePrice: number; salePrice?: number; costPrice?: number; currency?: string;
-  status?: string; isFeatured?: boolean; isNewArrival?: boolean;
+  status?: string; isFeatured?: boolean; isNewArrival?: boolean; showSalePrice?: boolean;
   metaTitle?: string; metaDescription?: string; metaKeywords?: string[];
   stockWarningThreshold?: number; weightGrams?: number; dimensionsCm?: Record<string, number>;
   attributes?: Record<string, unknown>; tags?: string[];
@@ -258,9 +289,10 @@ export async function createProduct(payload: {
     cost_price:               payload.costPrice,
     currency:                 payload.currency ?? 'KES',
     status:                   payload.status ?? 'draft',
-    is_featured:              payload.isFeatured  ?? false,
+    is_featured:              payload.isFeatured   ?? false,
     is_new_arrival:           payload.isNewArrival ?? false,
     is_best_seller:           false,
+    show_sale_price:          payload.showSalePrice ?? false,
     meta_title:               payload.metaTitle,
     meta_description:         payload.metaDescription,
     meta_keywords:            payload.metaKeywords,
@@ -276,6 +308,7 @@ export async function createProduct(payload: {
     logger.error('[createProduct] Supabase error', { message: error?.message, details: error?.details, hint: error?.hint });
     throw new BadRequestError(error?.message ?? 'Create failed');
   }
+  await cacheDelPattern('maschon:products:list:*');
   return data;
 }
 
@@ -283,7 +316,7 @@ export async function updateProduct(id: string, payload: Partial<{
   categoryId: string; brandId: string; name: string; slug: string; sku: string;
   shortDescription: string; fullDescription: string;
   basePrice: number; salePrice: number | null; costPrice: number;
-  status: string; isFeatured: boolean; isNewArrival: boolean; isBestSeller: boolean;
+  status: string; isFeatured: boolean; isNewArrival: boolean; isBestSeller: boolean; showSalePrice: boolean;
   metaTitle: string; metaDescription: string; metaKeywords: string[];
   stockWarningThreshold: number; weightGrams: number; attributes: Record<string, unknown>;
   tags: string[];
@@ -306,6 +339,7 @@ export async function updateProduct(id: string, payload: Partial<{
   if (payload.isFeatured            !== undefined) updates.is_featured             = payload.isFeatured;
   if (payload.isNewArrival          !== undefined) updates.is_new_arrival          = payload.isNewArrival;
   if (payload.isBestSeller          !== undefined) updates.is_best_seller          = payload.isBestSeller;
+  if (payload.showSalePrice         !== undefined) updates.show_sale_price         = payload.showSalePrice;
   if (payload.metaTitle             !== undefined) updates.meta_title              = payload.metaTitle;
   if (payload.metaDescription       !== undefined) updates.meta_description        = payload.metaDescription;
   if (payload.metaKeywords          !== undefined) updates.meta_keywords           = payload.metaKeywords;
@@ -317,6 +351,13 @@ export async function updateProduct(id: string, payload: Partial<{
   const { data, error } = await supabaseAdmin
     .from('products').update(updates).eq('id', id).select().single();
   if (error || !data) throw new NotFoundError('Product');
+
+  // Invalidate both the list cache and any slug-specific cache for this product
+  const row = data as { slug?: string };
+  await Promise.all([
+    cacheDelPattern('maschon:products:list:*'),
+    row.slug ? cacheDel(buildKey('products:slug', row.slug)) : Promise.resolve(),
+  ]);
   return data;
 }
 
@@ -333,16 +374,25 @@ export async function deleteProduct(id: string) {
     );
   }
 
+  const { data: productRow } = await supabaseAdmin
+    .from('products').select('slug').eq('id', id).single();
+
   const { error } = await supabaseAdmin
     .from('products').update({ status: 'archived' }).eq('id', id);
   if (error) throw new NotFoundError('Product');
+
+  const slug = (productRow as { slug?: string } | null)?.slug;
+  await Promise.all([
+    cacheDelPattern('maschon:products:list:*'),
+    slug ? cacheDel(buildKey('products:slug', slug)) : Promise.resolve(),
+  ]);
 }
 
 // ─── Product media ─────────────────────────────────────────────────────────────
 
 export async function addProductMedia(productId: string, payload: {
   mediaType?: string; url: string; thumbnailUrl?: string;
-  altText?: string; displayOrder?: number; isPrimary?: boolean;
+  altText?: string; displayOrder?: number; isPrimary?: boolean; variantId?: string;
 }) {
   if (payload.isPrimary) {
     await supabaseAdmin.from('product_media').update({ is_primary: false }).eq('product_id', productId);
@@ -355,8 +405,15 @@ export async function addProductMedia(productId: string, payload: {
     alt_text:      payload.altText,
     display_order: payload.displayOrder ?? 0,
     is_primary:    payload.isPrimary ?? false,
+    variant_id:    payload.variantId ?? null,
   }).select().single();
   if (error || !data) throw new BadRequestError(error?.message ?? 'Media add failed');
+
+  // Invalidate product detail so updated images are visible immediately
+  const { data: p } = await supabaseAdmin.from('products').select('slug').eq('id', productId).single();
+  const slug = (p as { slug?: string } | null)?.slug;
+  if (slug) await cacheDel(buildKey('products:slug', slug));
+
   return data;
 }
 
@@ -373,6 +430,10 @@ export async function deleteProductMedia(productId: string, mediaId: string) {
     const pid = extractCloudinaryPublicId(row.url);
     if (pid) await deleteImage(pid).catch(() => {});
   }
+
+  const { data: p } = await supabaseAdmin.from('products').select('slug').eq('id', productId).single();
+  const slug = (p as { slug?: string } | null)?.slug;
+  if (slug) await cacheDel(buildKey('products:slug', slug));
 }
 
 // ─── Supplier comparison (product page) ───────────────────────────────────────
@@ -383,6 +444,42 @@ export async function getSupplierComparison(productId: string) {
     .select('*')
     .eq('product_id', productId);
   return data ?? [];
+}
+
+// ─── Product variants ──────────────────────────────────────────────────────────
+
+export async function createProductVariant(productId: string, payload: {
+  name: string; sku?: string; options: Record<string, string>;
+  additionalPrice?: number; stockQuantity?: number;
+}) {
+  const { data, error } = await supabaseAdmin.from('product_variants').insert({
+    product_id:       productId,
+    name:             payload.name,
+    sku:              payload.sku ?? null,
+    options:          payload.options,
+    additional_price: payload.additionalPrice ?? 0,
+    stock_quantity:   payload.stockQuantity ?? 0,
+    is_active:        true,
+  }).select('id, name, options, additional_price').single();
+  if (error || !data) throw new BadRequestError(error?.message ?? 'Create variant failed');
+
+  const v = data as { id: string; name: string; options: Record<string, string>; additional_price: number };
+  // Invalidate product cache so the new variant shows up immediately
+  const { data: p } = await supabaseAdmin.from('products').select('slug').eq('id', productId).single();
+  const slug = (p as { slug?: string } | null)?.slug;
+  if (slug) await cacheDel(buildKey('products:slug', slug));
+
+  return { id: v.id, name: v.name, options: v.options, additionalPrice: Number(v.additional_price) };
+}
+
+export async function deleteProductVariant(productId: string, variantId: string) {
+  const { error } = await supabaseAdmin
+    .from('product_variants').delete().eq('id', variantId).eq('product_id', productId);
+  if (error) throw new NotFoundError('Variant');
+
+  const { data: p } = await supabaseAdmin.from('products').select('slug').eq('id', productId).single();
+  const slug = (p as { slug?: string } | null)?.slug;
+  if (slug) await cacheDel(buildKey('products:slug', slug));
 }
 
 // ─── Increment view count ──────────────────────────────────────────────────────

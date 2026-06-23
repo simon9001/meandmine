@@ -101,60 +101,180 @@ export const templates = {
     total: number,
     customerName = '',
     items: { name: string; quantity: number; price: number }[] = [],
-  ) => ({
-    subject: `Payment Confirmed — ${orderNumber} ✓`,
-    html: `
-      <div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:32px 24px">
-        <div style="background:#f0fdf4;border-radius:12px;padding:24px;text-align:center;margin-bottom:24px">
-          <p style="font-size:40px;margin:0">✅</p>
-          <h1 style="color:#15803d;margin:8px 0 4px">Payment Confirmed!</h1>
-          <p style="color:#166534;margin:0;font-size:14px">Your order is now being processed</p>
-        </div>
+    delivery?: {
+      recipientName?: string;
+      phone?: string;
+      county?: string;
+      town?: string;
+      stage?: string;
+      deliveryMethod?: string;
+      instructions?: string;
+    },
+    discount?: number,
+    placedAt?: string,
+  ) => {
+    const fmt = (n: number) => `KES ${n.toLocaleString('en-KE', { minimumFractionDigits: 2 })}`;
+    const subtotal = items.reduce((s, i) => s + i.price * i.quantity, 0);
+    const dateStr  = placedAt
+      ? new Date(placedAt).toLocaleDateString('en-KE', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+      : new Date().toLocaleDateString('en-KE', { day: 'numeric', month: 'long', year: 'numeric' });
 
-        <p>Hi${customerName ? ` ${customerName}` : ''},</p>
-        <p>Great news! We've received your payment for order <strong>${orderNumber}</strong>. Your order is now confirmed and will be processed shortly.</p>
+    const waLink  = 'https://wa.me/254757568845';
+    const waText  = encodeURIComponent(`Hi, I have an enquiry about my MeAndMine order ${orderNumber}`);
 
-        ${items.length > 0 ? `
-        <h3 style="color:#111;margin-top:24px;margin-bottom:12px;font-size:15px">Order Summary</h3>
-        <table style="width:100%;border-collapse:collapse;font-size:14px">
-          <thead>
-            <tr style="background:#f9fafb">
-              <th style="text-align:left;padding:10px 12px;border-bottom:2px solid #e5e7eb;color:#374151">Item</th>
-              <th style="text-align:center;padding:10px 12px;border-bottom:2px solid #e5e7eb;color:#374151">Qty</th>
-              <th style="text-align:right;padding:10px 12px;border-bottom:2px solid #e5e7eb;color:#374151">Price</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${items.map((i) => `
-            <tr>
-              <td style="padding:10px 12px;border-bottom:1px solid #f3f4f6;color:#111">${i.name}</td>
-              <td style="padding:10px 12px;border-bottom:1px solid #f3f4f6;color:#111;text-align:center">${i.quantity}</td>
-              <td style="padding:10px 12px;border-bottom:1px solid #f3f4f6;color:#111;text-align:right">KES ${(i.price * i.quantity).toLocaleString('en-KE', { minimumFractionDigits: 2 })}</td>
-            </tr>`).join('')}
-          </tbody>
-          <tfoot>
-            <tr>
-              <td colspan="2" style="padding:12px 12px 4px;font-weight:700;color:#111;text-align:right">Total Paid:</td>
-              <td style="padding:12px 12px 4px;font-weight:700;font-size:16px;color:#15803d;text-align:right">KES ${total.toLocaleString('en-KE', { minimumFractionDigits: 2 })}</td>
-            </tr>
-          </tfoot>
-        </table>` : `
-        <p style="font-size:20px;font-weight:700;color:#15803d">Total Paid: KES ${total.toLocaleString('en-KE', { minimumFractionDigits: 2 })}</p>`}
+    const deliveryLabel = delivery?.deliveryMethod === 'pickup' ? 'Self Pickup' : 'Home Delivery';
+    const deliveryAddr  = delivery
+      ? [delivery.town, delivery.county, delivery.stage].filter(Boolean).join(', ')
+      : '';
 
-        <p style="margin-top:24px">We'll send you another email when your order ships with tracking details.</p>
+    return {
+      subject: `🎉 Order Confirmed — ${orderNumber}`,
+      html: `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 16px">
+  <tr><td align="center">
+  <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%">
 
-        <a href="${env.FRONTEND_URL}/account/orders" style="display:inline-block;padding:12px 28px;background:#15803d;color:#fff;text-decoration:none;border-radius:8px;margin-top:16px;font-weight:600">
-          Track Your Order →
-        </a>
+    <!-- Header -->
+    <tr><td style="background:linear-gradient(135deg,#1a3828 0%,#2d5016 100%);border-radius:16px 16px 0 0;padding:32px 36px;text-align:center">
+      <p style="margin:0;font-size:13px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#a3c4a8">MeAndMine.shop</p>
+      <p style="margin:12px 0 4px;font-size:42px">🎉</p>
+      <h1 style="margin:0;font-size:26px;font-weight:800;color:#ffffff">Order Confirmed!</h1>
+      <p style="margin:8px 0 0;font-size:14px;color:#a3c4a8">Thank you, ${customerName || 'valued customer'}. Your payment has been received.</p>
+    </td></tr>
 
-        <hr style="border:none;border-top:1px solid #e5e7eb;margin:32px 0" />
-        <p style="color:#9ca3af;font-size:12px">
-          Order reference: <strong>${orderNumber}</strong><br />
-          If you have any questions, reply to this email or visit our help centre.
-        </p>
-      </div>`,
-    text: `Payment confirmed for order ${orderNumber}.\n\nTotal paid: KES ${total.toFixed(2)}\n\nTrack your order: ${env.FRONTEND_URL}/account/orders`,
-  }),
+    <!-- Order meta strip -->
+    <tr><td style="background:#ffffff;padding:20px 36px;border-bottom:1px solid #f3f4f6">
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr>
+          <td style="font-size:12px;color:#6b7280">Order number</td>
+          <td style="font-size:12px;color:#6b7280;text-align:right">Date</td>
+        </tr>
+        <tr>
+          <td style="font-size:15px;font-weight:700;color:#111827">${orderNumber}</td>
+          <td style="font-size:13px;color:#374151;text-align:right">${dateStr}</td>
+        </tr>
+      </table>
+    </td></tr>
+
+    <!-- Items table -->
+    <tr><td style="background:#ffffff;padding:24px 36px 0">
+      <p style="margin:0 0 12px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#6b7280">Items Ordered</p>
+      <table width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;border-collapse:collapse">
+        <tr style="background:#f9fafb">
+          <th style="text-align:left;padding:10px 12px;border-bottom:2px solid #e5e7eb;color:#374151;font-weight:600">Product</th>
+          <th style="text-align:center;padding:10px 12px;border-bottom:2px solid #e5e7eb;color:#374151;font-weight:600">Qty</th>
+          <th style="text-align:right;padding:10px 12px;border-bottom:2px solid #e5e7eb;color:#374151;font-weight:600">Amount</th>
+        </tr>
+        ${items.map((i, idx) => `
+        <tr style="background:${idx % 2 === 0 ? '#ffffff' : '#fafafa'}">
+          <td style="padding:10px 12px;border-bottom:1px solid #f3f4f6;color:#111827">${i.name}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #f3f4f6;color:#374151;text-align:center">${i.quantity}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #f3f4f6;color:#111827;text-align:right;font-weight:600">${fmt(i.price * i.quantity)}</td>
+        </tr>`).join('')}
+        ${items.length > 1 ? `
+        <tr>
+          <td colspan="2" style="padding:10px 12px;color:#6b7280;font-size:12px">Subtotal</td>
+          <td style="padding:10px 12px;text-align:right;color:#374151">${fmt(subtotal)}</td>
+        </tr>` : ''}
+        ${discount && discount > 0 ? `
+        <tr>
+          <td colspan="2" style="padding:6px 12px;color:#15803d;font-size:12px">Discount</td>
+          <td style="padding:6px 12px;text-align:right;color:#15803d">− ${fmt(discount)}</td>
+        </tr>` : ''}
+        <tr style="background:#1a3828">
+          <td colspan="2" style="padding:14px 12px;font-weight:700;color:#ffffff;font-size:14px">Total Paid</td>
+          <td style="padding:14px 12px;font-weight:800;font-size:16px;color:#c47b2a;text-align:right">${fmt(total)}</td>
+        </tr>
+      </table>
+    </td></tr>
+
+    <!-- Delivery info -->
+    ${delivery ? `
+    <tr><td style="background:#ffffff;padding:24px 36px 0;margin-top:4px">
+      <p style="margin:0 0 12px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#6b7280">Delivery Details</p>
+      <table width="100%" cellpadding="0" cellspacing="0" style="background:#f9fafb;border-radius:10px;padding:16px;font-size:13px">
+        <tr>
+          <td style="padding:5px 0;color:#6b7280;width:140px">Recipient</td>
+          <td style="padding:5px 0;color:#111827;font-weight:600">${delivery.recipientName || customerName}</td>
+        </tr>
+        <tr>
+          <td style="padding:5px 0;color:#6b7280">Phone</td>
+          <td style="padding:5px 0;color:#111827">${delivery.phone || '—'}</td>
+        </tr>
+        <tr>
+          <td style="padding:5px 0;color:#6b7280">Method</td>
+          <td style="padding:5px 0;color:#111827">${deliveryLabel}</td>
+        </tr>
+        ${deliveryAddr ? `
+        <tr>
+          <td style="padding:5px 0;color:#6b7280">Location</td>
+          <td style="padding:5px 0;color:#111827">${deliveryAddr}</td>
+        </tr>` : ''}
+        ${delivery.instructions ? `
+        <tr>
+          <td style="padding:5px 0;color:#6b7280">Notes</td>
+          <td style="padding:5px 0;color:#111827">${delivery.instructions}</td>
+        </tr>` : ''}
+      </table>
+    </td></tr>` : ''}
+
+    <!-- Next steps -->
+    <tr><td style="background:#ffffff;padding:24px 36px">
+      <p style="margin:0 0 12px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#6b7280">What Happens Next</p>
+      <table width="100%" cellpadding="0" cellspacing="0">
+        ${[
+          ['📦', 'We are processing your order', 'Our team is preparing your items for dispatch.'],
+          ['🚚', 'Delivery notification', "You'll receive an email with dispatch details when your order ships."],
+          ['📱', 'Track your order', 'Check your order status anytime from your account dashboard.'],
+        ].map(([icon, title, sub]) => `
+        <tr>
+          <td style="vertical-align:top;padding:8px 12px 8px 0;width:36px;font-size:22px">${icon}</td>
+          <td style="padding:8px 0">
+            <p style="margin:0;font-size:13px;font-weight:600;color:#111827">${title}</p>
+            <p style="margin:4px 0 0;font-size:12px;color:#6b7280">${sub}</p>
+          </td>
+        </tr>`).join('')}
+      </table>
+    </td></tr>
+
+    <!-- CTA buttons -->
+    <tr><td style="background:#ffffff;padding:0 36px 32px;text-align:center">
+      <a href="${env.FRONTEND_URL}/account/orders"
+         style="display:inline-block;padding:13px 28px;background:#1a3828;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:700;font-size:14px;margin:4px">
+        Track My Order →
+      </a>
+      <a href="${waLink}?text=${waText}"
+         style="display:inline-block;padding:13px 28px;background:#25D366;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:700;font-size:14px;margin:4px">
+        💬 WhatsApp Us
+      </a>
+    </td></tr>
+
+    <!-- Footer -->
+    <tr><td style="background:#f9fafb;border-top:1px solid #e5e7eb;border-radius:0 0 16px 16px;padding:24px 36px;text-align:center">
+      <p style="margin:0 0 6px;font-size:13px;color:#374151;font-weight:600">Need help with your order?</p>
+      <p style="margin:0 0 12px;font-size:12px;color:#9ca3af">
+        Chat with us on WhatsApp:
+        <a href="${waLink}" style="color:#25D366;text-decoration:none;font-weight:600">0757 568 845</a>
+        · or reply to this email
+      </p>
+      <p style="margin:0;font-size:11px;color:#9ca3af">
+        © ${new Date().getFullYear()} MeAndMine.shop · Quality Home Goods, Kenya<br/>
+        Order ref: <strong>${orderNumber}</strong>
+      </p>
+    </td></tr>
+
+  </table>
+  </td></tr>
+</table>
+</body>
+</html>`,
+      text: `🎉 Order Confirmed — ${orderNumber}\n\nHi ${customerName || 'there'},\n\nYour payment has been received and your order is confirmed!\n\nItems:\n${items.map((i) => `  • ${i.name} × ${i.quantity}  —  ${fmt(i.price * i.quantity)}`).join('\n')}\n\nTotal Paid: ${fmt(total)}\n\n${delivery ? `Delivery: ${deliveryLabel}\nAddress: ${deliveryAddr}\n` : ''}Track your order: ${env.FRONTEND_URL}/account/orders\n\nFor enquiries, WhatsApp us: 0757 568 845`,
+    };
+  },
 
   orderStatusUpdate: (orderNumber: string, status: string, customerName = '') => ({
     subject: `Order Update — ${orderNumber}`,

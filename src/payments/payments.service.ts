@@ -3,6 +3,7 @@ import { supabaseAdmin } from '../config/db.js';
 import { env } from '../config/env.js';
 import { paymentsProcessedTotal } from '../config/metrics.js';
 import { sendEmail, templates } from '../config/email.js';
+import { sendTelegramMessage } from '../config/telegram.js';
 import { NotFoundError, BadRequestError, UnprocessableError } from '../utils/errors.js';
 
 const PAYSTACK_BASE = 'https://api.paystack.co';
@@ -57,10 +58,10 @@ async function handlePaymentConfirmed(opts: {
     changed_at:  paidAt,
   });
 
-  // Fetch order details (number, total, line items) for inventory + email
+  // Fetch order details (number, total, line items, delivery) for inventory + notifications
   const { data: orderData } = await supabaseAdmin
     .from('orders')
-    .select('order_number, total_amount, order_items(product_name, product_id, variant_id, quantity, unit_price)')
+    .select('order_number, total_amount, discount_amount, shipping_address, customer_note, placed_at, order_items(product_name, product_id, variant_id, quantity, unit_price)')
     .eq('id', orderId)
     .single();
 
@@ -110,7 +111,7 @@ async function handlePaymentConfirmed(opts: {
     // Cart clearing is non-critical
   }
 
-  // Send payment-confirmed email (non-blocking — never throws)
+  // Send notifications (email to customer + Telegram to admin) — non-blocking, never throws
   try {
     const { data: authUser } = await supabaseAdmin.auth.admin.getUserById(userId);
     const { data: profile } = await supabaseAdmin
@@ -120,34 +121,94 @@ async function handlePaymentConfirmed(opts: {
       .maybeSingle();
 
     const email = authUser.user?.email;
-    if (email && orderData) {
+
+    if (orderData) {
+      type RawItem = { product_name: string; quantity: number; unit_price: number };
+      const od = orderData as unknown as {
+        order_number:    string;
+        total_amount:    number;
+        discount_amount: number;
+        placed_at:       string | null;
+        customer_note:   string | null;
+        shipping_address: {
+          recipientName?:    string;
+          phone?:            string;
+          county?:           string;
+          town?:             string;
+          stage?:            string;
+          deliveryMethod?:   string;
+          instructions?:     string;
+        } | null;
+        order_items: RawItem[];
+      };
+
       const name = profile
         ? `${(profile as { first_name: string }).first_name} ${(profile as { last_name: string }).last_name}`.trim()
         : '';
 
-      type RawItem = { product_name: string; quantity: number; unit_price: number };
-      const od = orderData as unknown as {
-        order_number: string;
-        total_amount: number;
-        order_items: RawItem[];
-      };
+      const emailItems = (od.order_items ?? []).map((i) => ({
+        name:     i.product_name,
+        quantity: i.quantity,
+        price:    i.unit_price,
+      }));
 
-      sendEmail({
-        to: [{ email, name }],
-        ...templates.paymentConfirmed(
-          od.order_number,
-          od.total_amount,
-          name,
-          (od.order_items ?? []).map((i) => ({
-            name:     i.product_name,
-            quantity: i.quantity,
-            price:    i.unit_price,
-          })),
-        ),
-      }).catch(() => {});
+      // ── Customer confirmation email ──────────────────────────────────────
+      if (email) {
+        sendEmail({
+          to: [{ email, name }],
+          ...templates.paymentConfirmed(
+            od.order_number,
+            od.total_amount,
+            name,
+            emailItems,
+            od.shipping_address ?? undefined,
+            od.discount_amount ?? 0,
+            od.placed_at ?? undefined,
+          ),
+        }).catch(() => {});
+      }
+
+      // ── Admin Telegram notification ──────────────────────────────────────
+      const fmt = (n: number) => `KES ${Number(n).toLocaleString('en-KE', { minimumFractionDigits: 2 })}`;
+      const addr = od.shipping_address
+        ? [od.shipping_address.town, od.shipping_address.county, od.shipping_address.stage].filter(Boolean).join(', ')
+        : 'N/A';
+      const method = od.shipping_address?.deliveryMethod === 'pickup' ? 'Self Pickup' : 'Home Delivery';
+
+      const itemLines = emailItems
+        .map((i) => `  • ${i.name} × ${i.quantity}  —  ${fmt(i.price * i.quantity)}`)
+        .join('\n');
+
+      const tgMessage = [
+        `🛍️ <b>NEW ORDER CONFIRMED</b>`,
+        ``,
+        `📋 <b>Order:</b> ${od.order_number}`,
+        `📅 <b>Date:</b> ${new Date().toLocaleString('en-KE', { timeZone: 'Africa/Nairobi' })}`,
+        ``,
+        `👤 <b>Customer</b>`,
+        `  Name:  ${name || 'N/A'}`,
+        `  Email: ${email || 'N/A'}`,
+        `  Phone: ${od.shipping_address?.phone || 'N/A'}`,
+        ``,
+        `📦 <b>Items</b>`,
+        itemLines,
+        ``,
+        `💰 <b>Payment</b>`,
+        od.discount_amount > 0 ? `  Subtotal:  ${fmt(od.total_amount + od.discount_amount)}` : '',
+        od.discount_amount > 0 ? `  Discount:  − ${fmt(od.discount_amount)}` : '',
+        `  <b>Total Paid: ${fmt(od.total_amount)}</b>`,
+        ``,
+        `🚚 <b>Delivery</b>`,
+        `  Method:  ${method}`,
+        `  Address: ${addr}`,
+        od.shipping_address?.instructions ? `  Notes:   ${od.shipping_address.instructions}` : '',
+        od.customer_note ? `  Customer note: ${od.customer_note}` : '',
+      ].filter((l) => l !== undefined && l !== null).join('\n');
+
+      sendTelegramMessage(tgMessage).catch(() => {});
     }
   } catch {
-    // Email failure must never break the payment confirmation response
+    // Notification failure must never break the payment confirmation response
   }
 
   paymentsProcessedTotal.inc({ provider: 'paystack', status: 'paid' });

@@ -21,4 +21,8 @@ router.delete('/:id',                requireAuth, requireAdmin, ctrl.deleteProdu
 router.post('/:productId/media',     requireAuth, requireAdmin, ctrl.addProductMedia);
 router.delete('/:productId/media/:mediaId', requireAuth, requireAdmin, ctrl.deleteProductMedia);
 
+// Admin — variants
+router.post('/:productId/variants',                    requireAuth, requireAdmin, ctrl.createProductVariant);
+router.delete('/:productId/variants/:variantId',       requireAuth, requireAdmin, ctrl.deleteProductVariant);
+
 export default router;

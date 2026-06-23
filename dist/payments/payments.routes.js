@@ -1,0 +1,11 @@
+import { Hono } from 'hono';
+import { requireAuth } from '../middleware/auth.js';
+import * as ctrl from './payments.controller.js';
+const router = new Hono();
+router.post('/initialize', requireAuth, ctrl.initializePayment);
+router.post('/charge/mpesa', requireAuth, ctrl.chargeMpesa);
+router.get('/status/:reference', requireAuth, ctrl.checkPaymentStatus);
+router.get('/verify/:reference', requireAuth, ctrl.verifyPayment);
+router.get('/order/:orderId', requireAuth, ctrl.getPaymentForOrder);
+router.post('/webhook/paystack', ctrl.handleWebhook);
+export default router;

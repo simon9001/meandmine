@@ -1,39 +1,74 @@
 import { supabaseAdmin } from '../config/db.js';
 import { BadRequestError } from '../utils/errors.js';
+import { buildKey, cacheGet, cacheSet } from '../utils/cache.js';
+
+const TTL = {
+  stats:      60,   // 1 min  — admins want near-real-time counts
+  revenue:    300,  // 5 min  — daily revenue chart
+  topProducts: 300, // 5 min
+  lowStock:   120,  // 2 min  — stock levels
+};
 
 export async function getDashboardStats() {
-  const [orders, products, users, revenue] = await Promise.all([
-    supabaseAdmin.from('orders').select('id, status, total_amount, placed_at', { count: 'exact' }),
-    supabaseAdmin.from('products').select('id, status', { count: 'exact' }),
-    supabaseAdmin.from('user_profiles').select('id', { count: 'exact' }),
+  const key = buildKey('admin:stats');
+  const cached = await cacheGet<object>(key);
+  if (cached) return cached;
+
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+  // Use { head: true } = COUNT(*) only, no rows fetched — eliminates full table scans
+  const [
+    totalOrders,
+    pendingOrders,
+    shippedOrders,
+    deliveredOrders,
+    totalProducts,
+    activeProducts,
+    totalUsers,
+    revenue,
+  ] = await Promise.all([
+    supabaseAdmin.from('orders').select('*', { count: 'exact', head: true }),
+    supabaseAdmin.from('orders').select('*', { count: 'exact', head: true }).eq('status', 'awaiting_dispatch'),
+    supabaseAdmin.from('orders').select('*', { count: 'exact', head: true }).eq('status', 'dispatched'),
+    supabaseAdmin.from('orders').select('*', { count: 'exact', head: true }).eq('status', 'delivered'),
+    supabaseAdmin.from('products').select('*', { count: 'exact', head: true }),
+    supabaseAdmin.from('products').select('*', { count: 'exact', head: true }).eq('status', 'active'),
+    supabaseAdmin.from('user_profiles').select('*', { count: 'exact', head: true }),
     supabaseAdmin.from('orders')
       .select('total_amount')
       .eq('payment_status', 'paid')
-      .gte('placed_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()),
+      .gte('placed_at', thirtyDaysAgo),
   ]);
 
   const totalRevenue30d = (revenue.data ?? []).reduce(
     (sum, o) => sum + Number((o as { total_amount: number }).total_amount), 0,
   );
 
-  return {
+  const result = {
     orders: {
-      total:     orders.count ?? 0,
-      pending:   (orders.data ?? []).filter(o => (o as { status: string }).status === 'awaiting_dispatch').length,
-      shipped:   (orders.data ?? []).filter(o => (o as { status: string }).status === 'dispatched').length,
-      delivered: (orders.data ?? []).filter(o => (o as { status: string }).status === 'delivered').length,
+      total:     totalOrders.count     ?? 0,
+      pending:   pendingOrders.count   ?? 0,
+      shipped:   shippedOrders.count   ?? 0,
+      delivered: deliveredOrders.count ?? 0,
     },
     products: {
-      total:    products.count ?? 0,
-      active:   (products.data ?? []).filter(p => (p as { status: string }).status === 'active').length,
-      archived: (products.data ?? []).filter(p => (p as { status: string }).status === 'archived').length,
+      total:  totalProducts.count  ?? 0,
+      active: activeProducts.count ?? 0,
+      archived: (totalProducts.count ?? 0) - (activeProducts.count ?? 0),
     },
-    users:        { total: users.count ?? 0 },
-    revenue30d:   totalRevenue30d,
+    users:      { total: totalUsers.count ?? 0 },
+    revenue30d: totalRevenue30d,
   };
+
+  await cacheSet(key, result, TTL.stats);
+  return result;
 }
 
 export async function getDailyRevenue(days = 30) {
+  const key = buildKey('admin:revenue', days);
+  const cached = await cacheGet<{ date: string; revenue: number }[]>(key);
+  if (cached) return cached;
+
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
   const { data, error } = await supabaseAdmin
     .from('orders')
@@ -41,33 +76,43 @@ export async function getDailyRevenue(days = 30) {
     .eq('payment_status', 'paid')
     .gte('placed_at', since)
     .order('placed_at', { ascending: false });
+
   if (error) {
     console.warn('[analytics] getDailyRevenue error:', error.message);
     return [];
   }
-  // Aggregate by date client-side
+
   const byDate: Record<string, number> = {};
   for (const row of data ?? []) {
     const date = (row.placed_at as string).slice(0, 10);
     byDate[date] = (byDate[date] ?? 0) + Number(row.total_amount);
   }
-  return Object.entries(byDate)
+
+  const result = Object.entries(byDate)
     .map(([date, revenue]) => ({ date, revenue }))
     .sort((a, b) => b.date.localeCompare(a.date));
+
+  await cacheSet(key, result, TTL.revenue);
+  return result;
 }
 
 export async function getTopProducts(limit = 10) {
+  const key = buildKey('admin:top_products', limit);
+  const cached = await cacheGet<object[]>(key);
+  if (cached) return cached;
+
   const { data, error } = await supabaseAdmin
     .from('order_items')
     .select('product_id, quantity, unit_price, products(name, sku)');
+
   if (error) {
     console.warn('[analytics] getTopProducts error:', error.message);
     return [];
   }
-  // Aggregate by product client-side
+
   const byProduct: Record<string, { product_id: string; name: string; sku: string | null; total_qty: number; total_revenue: number }> = {};
   for (const row of data ?? []) {
-    const id = row.product_id as string;
+    const id      = row.product_id as string;
     const product = row.products as unknown as { name: string; sku: string | null } | null;
     if (!byProduct[id]) {
       byProduct[id] = { product_id: id, name: product?.name ?? '', sku: product?.sku ?? null, total_qty: 0, total_revenue: 0 };
@@ -75,25 +120,38 @@ export async function getTopProducts(limit = 10) {
     byProduct[id].total_qty     += Number(row.quantity);
     byProduct[id].total_revenue += Number(row.unit_price) * Number(row.quantity);
   }
-  return Object.values(byProduct)
+
+  const result = Object.values(byProduct)
     .sort((a, b) => b.total_revenue - a.total_revenue)
     .slice(0, limit);
+
+  await cacheSet(key, result, TTL.topProducts);
+  return result;
 }
 
 export async function refreshMaterializedViews() {
   const views = ['admin.mv_daily_revenue', 'admin.mv_top_products', 'admin.mv_supplier_performance', 'admin.mv_product_stats'];
-  for (const view of views) {
-    await supabaseAdmin.rpc('refresh_materialized_view' as never, { view_name: view });
-  }
+  // Run all refreshes in parallel — was sequential (4× slower)
+  await Promise.all(
+    views.map((view) => supabaseAdmin.rpc('refresh_materialized_view' as never, { view_name: view }))
+  );
   return { refreshed: views };
 }
 
 export async function getLowStockSummary(threshold = 5) {
+  const key = buildKey('admin:low_stock', threshold);
+  const cached = await cacheGet<unknown[]>(key);
+  if (cached) return cached;
+
   const { data, error } = await supabaseAdmin
     .from('inventory')
     .select('product_id, variant_id, available_stock, products(name, sku)')
     .lte('available_stock' as 'id', threshold)
     .order('available_stock' as 'id', { ascending: true });
+
   if (error) throw new BadRequestError(error.message);
-  return data ?? [];
+
+  const result = data ?? [];
+  await cacheSet(key, result, TTL.lowStock);
+  return result;
 }

@@ -3,11 +3,13 @@ import app from './app.js';
 import { env } from './config/env.js';
 import { logger } from './config/logger.js';
 import { checkDbConnection } from './config/db.js';
+import { connectRedis, disconnectRedis } from './config/redis.js';
 
 const PORT = Number(env.PORT ?? 3000);
 
 async function start() {
   await checkDbConnection();
+  connectRedis();
 
   const server = serve({ fetch: app.fetch, port: PORT }, () => {
     logger.info(`Server running on http://localhost:${PORT} [${env.NODE_ENV}]`);
@@ -15,6 +17,7 @@ async function start() {
 
   function shutdown(signal: string) {
     logger.info(`${signal} received — shutting down`);
+    disconnectRedis().catch(() => {});
     server.close(() => {
       logger.info('Server closed');
       process.exit(0);

@@ -38,6 +38,7 @@ export async function createProduct(c: Context<AppEnv>) {
     status:                 z.enum(['draft', 'active', 'archived', 'out_of_stock']).optional(),
     isFeatured:             z.boolean().optional(),
     isNewArrival:           z.boolean().optional(),
+    showSalePrice:          z.boolean().optional(),
     metaTitle:              z.string().max(255).optional(),
     metaDescription:        z.string().optional(),
     metaKeywords:           z.array(z.string()).optional(),
@@ -65,6 +66,7 @@ export async function updateProduct(c: Context<AppEnv>) {
     isFeatured:             z.boolean().optional(),
     isNewArrival:           z.boolean().optional(),
     isBestSeller:           z.boolean().optional(),
+    showSalePrice:          z.boolean().optional(),
     metaTitle:              z.string().max(255).optional(),
     metaDescription:        z.string().optional(),
     metaKeywords:           z.array(z.string()).optional(),
@@ -89,11 +91,28 @@ export async function addProductMedia(c: Context<AppEnv>) {
     altText:      z.string().max(500).optional(),
     displayOrder: z.number().int().optional(),
     isPrimary:    z.boolean().optional(),
+    variantId:    z.string().uuid().optional(),
   }).parse(await c.req.json());
   return ok(c, await svc.addProductMedia(c.req.param('productId')!, body), 201);
 }
 
 export async function deleteProductMedia(c: Context<AppEnv>) {
   await svc.deleteProductMedia(c.req.param('productId')!, c.req.param('mediaId')!);
+  return noContent(c);
+}
+
+export async function createProductVariant(c: Context<AppEnv>) {
+  const body = z.object({
+    name:            z.string().min(1),
+    sku:             z.string().optional(),
+    options:         z.record(z.string(), z.string()),
+    additionalPrice: z.number().optional(),
+    stockQuantity:   z.number().int().optional(),
+  }).parse(await c.req.json());
+  return ok(c, await svc.createProductVariant(c.req.param('productId')!, body), 201);
+}
+
+export async function deleteProductVariant(c: Context<AppEnv>) {
+  await svc.deleteProductVariant(c.req.param('productId')!, c.req.param('variantId')!);
   return noContent(c);
 }

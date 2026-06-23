@@ -1,0 +1,10 @@
+import { Hono } from 'hono';
+import { requireAuth, requireAdmin } from '../middleware/auth.js';
+import * as ctrl from './categories.controller.js';
+const router = new Hono();
+router.get('/', ctrl.listCategories);
+router.get('/:slug', ctrl.getCategoryBySlug);
+router.post('/', requireAuth, requireAdmin, ctrl.createCategory);
+router.patch('/:id', requireAuth, requireAdmin, ctrl.updateCategory);
+router.delete('/:id', requireAuth, requireAdmin, ctrl.deleteCategory);
+export default router;

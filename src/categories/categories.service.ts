@@ -1,23 +1,39 @@
 import { supabaseAdmin } from '../config/db.js';
 import { NotFoundError, BadRequestError, ConflictError } from '../utils/errors.js';
+import { buildKey, cacheGet, cacheSet, cacheDelPattern } from '../utils/cache.js';
+
+const TTL = { list: 600, slug: 600 }; // 10 min — categories change rarely
 
 export async function listCategories(activeOnly = true) {
+  const key = buildKey('categories:all', activeOnly);
+  const cached = await cacheGet<unknown[]>(key);
+  if (cached) return cached;
+
   let q = supabaseAdmin
     .from('categories')
     .select('id, parent_id, name, slug, description, image_url, icon_url, display_order, depth_level, is_active')
     .order('display_order');
   if (activeOnly) q = q.eq('is_active', true);
   const { data } = await q;
-  return data ?? [];
+  const result = data ?? [];
+
+  await cacheSet(key, result, TTL.list);
+  return result;
 }
 
 export async function getCategoryBySlug(slug: string) {
+  const key = buildKey('categories:slug', slug);
+  const cached = await cacheGet<unknown>(key);
+  if (cached) return cached;
+
   const { data, error } = await supabaseAdmin
     .from('categories')
     .select('*')
     .eq('slug', slug)
     .single();
   if (error || !data) throw new NotFoundError('Category');
+
+  await cacheSet(key, data, TTL.slug);
   return data;
 }
 
@@ -55,6 +71,7 @@ export async function createCategory(payload: {
   }).select().single();
 
   if (error || !data) throw new BadRequestError(error?.message ?? 'Create failed');
+  await cacheDelPattern('maschon:categories:*');
   return data;
 }
 
@@ -77,10 +94,12 @@ export async function updateCategory(id: string, payload: Partial<{
   const { data, error } = await supabaseAdmin
     .from('categories').update(updates).eq('id', id).select().single();
   if (error || !data) throw new NotFoundError('Category');
+  await cacheDelPattern('maschon:categories:*');
   return data;
 }
 
 export async function deleteCategory(id: string) {
   const { error } = await supabaseAdmin.from('categories').delete().eq('id', id);
   if (error) throw new BadRequestError(error.message);
+  await cacheDelPattern('maschon:categories:*');
 }

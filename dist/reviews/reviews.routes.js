@@ -1,0 +1,10 @@
+import { Hono } from 'hono';
+import { requireAuth, requireAdmin } from '../middleware/auth.js';
+import * as ctrl from './reviews.controller.js';
+const router = new Hono();
+router.get('/product/:productId', ctrl.listProductReviews);
+router.post('/', requireAuth, ctrl.createReview);
+router.post('/:reviewId/vote', requireAuth, ctrl.voteReview);
+router.get('/admin', requireAuth, requireAdmin, ctrl.adminListReviews);
+router.patch('/:reviewId/moderate', requireAuth, requireAdmin, ctrl.moderateReview);
+export default router;

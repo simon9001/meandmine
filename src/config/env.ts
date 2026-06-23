@@ -29,6 +29,11 @@ const schema = z.object({
   RATE_LIMIT_WINDOW_MS: z.coerce.number().default(60_000),
   RATE_LIMIT_MAX: z.coerce.number().default(100),
   METRICS_TOKEN: z.string().optional(),
+
+  REDIS_URL: z.string().url().optional(),
+
+  TELEGRAM_BOT_TOKEN: z.string().optional(),
+  TELEGRAM_CHAT_ID:   z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);
