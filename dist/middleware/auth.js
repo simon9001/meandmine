@@ -37,3 +37,31 @@ export const requireRole = (...roles) => createMiddleware(async (c, next) => {
     await next();
 });
 export const requireAdmin = requireRole('admin', 'superadmin');
+// Silently attaches user to context if a valid auth token is present.
+// Does NOT reject the request — safe to use on public/guest routes that also support auth.
+export const optionalAuth = createMiddleware(async (c, next) => {
+    const authHeader = c.req.header('Authorization');
+    const token = (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null)
+        ?? getCookie(c, 'access_token')
+        ?? null;
+    if (token) {
+        try {
+            const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
+            if (!error && user) {
+                const { data: profile } = await supabaseAdmin
+                    .from('user_profiles')
+                    .select('role, is_active')
+                    .eq('id', user.id)
+                    .single();
+                if (profile?.is_active) {
+                    c.set('user', { id: user.id, email: user.email, role: profile.role });
+                    c.set('userClient', createUserClient(token));
+                }
+            }
+        }
+        catch {
+            // Token invalid or expired — continue as guest
+        }
+    }
+    await next();
+});
