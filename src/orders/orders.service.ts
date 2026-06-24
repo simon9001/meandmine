@@ -3,34 +3,115 @@ import { sendEmail, templates } from '../config/email.js';
 import { ordersCreatedTotal } from '../config/metrics.js';
 import { NotFoundError, BadRequestError, UnprocessableError } from '../utils/errors.js';
 import { parsePage } from '../utils/pagination.js';
+import { logger } from '../config/logger.js';
 import type { CheckoutPayload } from '../types/index.js';
 
 export async function listOrders(userId: string, query: { page?: string; limit?: string; status?: string }) {
   const { page, limit, offset } = parsePage(query);
+
+  // Step 1 — fetch orders (flat, no nested join — order_items FK not in schema cache)
   let q = supabaseAdmin
     .from('orders')
-    .select('id, order_number, status, payment_status, total_amount, currency, placed_at, delivered_at', { count: 'exact' })
+    .select(
+      'id, order_number, status, payment_status, subtotal, discount_amount, shipping_fee, total_amount, currency, placed_at, delivered_at, customer_note, shipping_address, metadata',
+      { count: 'exact' },
+    )
     .eq('user_id', userId)
     .order('placed_at', { ascending: false })
     .range(offset, offset + limit - 1);
   if (query.status) q = q.eq('status', query.status);
-  const { data, count } = await q;
-  return { data: data ?? [], meta: { total: count ?? 0, page, limit } };
+
+  const { data: orders, error, count } = await q;
+  if (error) {
+    logger.error('[listOrders] Supabase error', { message: error.message, details: error.details });
+    return { data: [], meta: { total: 0, page, limit } };
+  }
+  if (!orders?.length) return { data: [], meta: { total: count ?? 0, page, limit } };
+
+  // Step 2 — fetch all order_items for these orders in one query
+  const orderIds = orders.map((o: Record<string, unknown>) => o.id as string);
+  const { data: items } = await supabaseAdmin
+    .from('order_items')
+    .select('id, order_id, product_id, product_name, product_sku, variant_options, quantity, unit_price, total_price, fulfillment_status')
+    .in('order_id', orderIds);
+
+  // Step 3 — fetch product images for the items
+  const productIds = [...new Set((items ?? []).map((i: Record<string, unknown>) => i.product_id as string).filter(Boolean))];
+  const productMap: Record<string, { primary_image_url?: string; slug?: string }> = {};
+  if (productIds.length > 0) {
+    const { data: products } = await supabaseAdmin
+      .from('products')
+      .select('id, primary_image_url, slug')
+      .in('id', productIds);
+    (products ?? []).forEach((p: Record<string, unknown>) => {
+      productMap[p.id as string] = { primary_image_url: p.primary_image_url as string, slug: p.slug as string };
+    });
+  }
+
+  // Step 4 — merge items (with image info) onto their orders
+  const itemsByOrder: Record<string, unknown[]> = {};
+  for (const item of (items ?? []) as Record<string, unknown>[]) {
+    const oid = item.order_id as string;
+    if (!itemsByOrder[oid]) itemsByOrder[oid] = [];
+    itemsByOrder[oid].push({
+      ...item,
+      primary_image_url: productMap[item.product_id as string]?.primary_image_url ?? null,
+      product_slug:      productMap[item.product_id as string]?.slug ?? null,
+    });
+  }
+
+  const data = orders.map((o: Record<string, unknown>) => ({
+    ...o,
+    order_items: itemsByOrder[o.id as string] ?? [],
+  }));
+
+  return { data, meta: { total: count ?? 0, page, limit } };
 }
 
 export async function getOrder(orderId: string, userId?: string) {
-  let q = supabaseAdmin
-    .from('orders')
-    .select(`
-      *,
-      order_items(id, product_id, variant_id, supply_id, supplier_id, product_name, product_sku, variant_options, quantity, unit_price, total_price, fulfillment_status),
-      order_status_history(from_status, to_status, reason, changed_at)
-    `)
-    .eq('id', orderId);
+  // Fetch flat order fields only — no nested joins (FKs not in schema cache)
+  let q = supabaseAdmin.from('orders').select('*').eq('id', orderId);
   if (userId) q = q.eq('user_id', userId);
-  const { data, error } = await q.single();
-  if (error || !data) throw new NotFoundError('Order');
-  return data;
+  const { data: order, error } = await q.single();
+  if (error || !order) throw new NotFoundError('Order');
+
+  // Fetch order_items and order_status_history separately
+  const [{ data: items }, { data: history }] = await Promise.all([
+    supabaseAdmin
+      .from('order_items')
+      .select('id, order_id, product_id, variant_id, supply_id, supplier_id, product_name, product_sku, variant_options, quantity, unit_price, total_price, fulfillment_status')
+      .eq('order_id', orderId),
+    supabaseAdmin
+      .from('order_status_history')
+      .select('from_status, to_status, reason, changed_at')
+      .eq('order_id', orderId)
+      .order('changed_at', { ascending: true }),
+  ]);
+
+  // Enrich items with product image + slug
+  const productIds = [...new Set((items ?? []).map((i: Record<string, unknown>) => i.product_id as string).filter(Boolean))];
+  const productMap: Record<string, { primary_image_url?: string; slug?: string }> = {};
+  if (productIds.length > 0) {
+    const { data: products } = await supabaseAdmin
+      .from('products')
+      .select('id, primary_image_url, slug')
+      .in('id', productIds);
+    (products ?? []).forEach((p: Record<string, unknown>) => {
+      productMap[p.id as string] = { primary_image_url: p.primary_image_url as string, slug: p.slug as string };
+    });
+  }
+
+  const enrichedItems = (items ?? []).map((item: Record<string, unknown>) => ({
+    ...item,
+    primary_image_url: productMap[item.product_id as string]?.primary_image_url ?? null,
+    product_slug:      productMap[item.product_id as string]?.slug ?? null,
+  }));
+
+  return {
+    ...(order as Record<string, unknown>),
+    order_items:          enrichedItems,
+    order_status_history: history ?? [],
+  };
 }
 
 export async function createOrder(userId: string, payload: CheckoutPayload, _ip?: string) {
@@ -508,18 +589,30 @@ export async function createGuestOrder(payload: GuestCheckoutPayload) {
 // ─── Public order tracking (by order number, no auth) ────────────────────────
 
 export async function trackOrderByNumber(orderNumber: string) {
-  const { data, error } = await supabaseAdmin
+  const { data: order, error } = await supabaseAdmin
     .from('orders')
-    .select(`
-      id, order_number, status, payment_status,
-      subtotal, shipping_fee, total_amount, currency,
-      placed_at, metadata, shipping_address,
-      order_items(product_name, quantity, unit_price, total_price),
-      order_status_history(from_status, to_status, changed_at)
-    `)
+    .select('id, order_number, status, payment_status, subtotal, shipping_fee, total_amount, currency, placed_at, metadata, shipping_address')
     .eq('order_number', orderNumber)
     .single();
 
-  if (error || !data) throw new NotFoundError('Order');
-  return data;
+  if (error || !order) throw new NotFoundError('Order');
+  const orderId = (order as Record<string, unknown>).id as string;
+
+  const [{ data: items }, { data: history }] = await Promise.all([
+    supabaseAdmin
+      .from('order_items')
+      .select('product_name, quantity, unit_price, total_price')
+      .eq('order_id', orderId),
+    supabaseAdmin
+      .from('order_status_history')
+      .select('from_status, to_status, changed_at')
+      .eq('order_id', orderId)
+      .order('changed_at', { ascending: true }),
+  ]);
+
+  return {
+    ...(order as Record<string, unknown>),
+    order_items:          items ?? [],
+    order_status_history: history ?? [],
+  };
 }

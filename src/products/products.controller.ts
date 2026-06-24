@@ -18,6 +18,10 @@ export async function getProductBySlug(c: Context<AppEnv>) {
   return ok(c, product);
 }
 
+export async function getProductForAdmin(c: Context<AppEnv>) {
+  return ok(c, await svc.getProductForAdmin(c.req.param('id')!));
+}
+
 export async function getSupplierComparison(c: Context<AppEnv>) {
   return ok(c, await svc.getSupplierComparison(c.req.param('productId')!));
 }

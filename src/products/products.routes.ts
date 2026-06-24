@@ -7,6 +7,8 @@ const router = new Hono<AppEnv>();
 
 // Public
 router.get('/',                                         ctrl.listProducts);
+// Admin full-detail fetch by ID — must be BEFORE /:slug so "admin" isn't treated as a slug
+router.get('/admin/:id',  requireAuth, requireAdmin,    ctrl.getProductForAdmin);
 router.get('/:slug',                                    ctrl.getProductBySlug);
 
 // Admin — supplier intelligence (not for public)

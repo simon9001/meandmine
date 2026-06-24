@@ -264,6 +264,38 @@ export async function getProductById(id: string) {
   return data;
 }
 
+// Admin-only: returns full product detail for any status (draft, archived, etc.)
+// Uses the products table directly — NOT the v_product_page view — so no status filter.
+export async function getProductForAdmin(id: string) {
+  const { data, error } = await supabaseAdmin
+    .from('products')
+    .select(`
+      *,
+      categories(id, name, slug),
+      brands(id, name, slug)
+    `)
+    .eq('id', id)
+    .single();
+  if (error || !data) throw new NotFoundError('Product');
+
+  const raw = data as Record<string, unknown>;
+
+  const [mediaRes, variantsRes] = await Promise.all([
+    supabaseAdmin
+      .from('product_media')
+      .select('id, media_type, url, thumbnail_url, alt_text, display_order, is_primary, variant_id')
+      .eq('product_id', id)
+      .order('display_order'),
+    supabaseAdmin
+      .from('product_variants')
+      .select('id, sku, name, options, additional_price, stock_quantity, is_active')
+      .eq('product_id', id)
+      .eq('is_active', true),
+  ]);
+
+  return buildProductDetail(raw, mediaRes.data ?? [], variantsRes.data, null);
+}
+
 export async function createProduct(payload: {
   categoryId?: string; brandId?: string; name: string; slug: string; sku?: string;
   shortDescription?: string; fullDescription?: string;
