@@ -5,6 +5,7 @@ import { paymentsProcessedTotal } from '../config/metrics.js';
 import { sendEmail, templates } from '../config/email.js';
 import { sendTelegramMessage } from '../config/telegram.js';
 import { NotFoundError, BadRequestError, UnprocessableError } from '../utils/errors.js';
+import { logAudit } from '../superadmin/audit.js';
 
 const PAYSTACK_BASE = 'https://api.paystack.co';
 
@@ -263,6 +264,20 @@ async function handlePaymentConfirmed(opts: {
   }
 
   paymentsProcessedTotal.inc({ provider: 'paystack', status: 'paid' });
+
+  // Audit trail for every successful payment
+  logAudit({
+    actorId:      userId,
+    actorRole:    'customer',
+    action:       'payment.confirmed',
+    resourceType: 'order',
+    resourceId:   orderId,
+    details: {
+      paymentId,
+      paymentMethod,
+      paidAt,
+    },
+  });
 }
 
 // ─── Public service functions ─────────────────────────────────────────────────

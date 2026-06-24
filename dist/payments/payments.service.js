@@ -5,6 +5,7 @@ import { paymentsProcessedTotal } from '../config/metrics.js';
 import { sendEmail, templates } from '../config/email.js';
 import { sendTelegramMessage } from '../config/telegram.js';
 import { NotFoundError, BadRequestError, UnprocessableError } from '../utils/errors.js';
+import { logAudit } from '../superadmin/audit.js';
 const PAYSTACK_BASE = 'https://api.paystack.co';
 async function paystackRequest(path, method = 'GET', body) {
     const res = await fetch(`${PAYSTACK_BASE}${path}`, {
@@ -55,6 +56,7 @@ async function handlePaymentConfirmed(opts) {
         const orderItems = orderData.order_items ?? [];
         for (const item of orderItems) {
             try {
+                // Update inventory table
                 const { data: inv } = await supabaseAdmin
                     .from('inventory')
                     .select('id, total_stock, reserved_stock')
@@ -63,13 +65,43 @@ async function handlePaymentConfirmed(opts) {
                     .maybeSingle();
                 if (inv) {
                     const row = inv;
+                    const newTotal = Math.max(0, row.total_stock - item.quantity);
                     await supabaseAdmin
                         .from('inventory')
                         .update({
-                        total_stock: Math.max(0, row.total_stock - item.quantity),
+                        total_stock: newTotal,
                         reserved_stock: Math.max(0, row.reserved_stock - item.quantity),
                     })
                         .eq('id', row.id);
+                    // Keep product_variants.stock_quantity in sync
+                    if (item.variant_id) {
+                        await supabaseAdmin
+                            .from('product_variants')
+                            .update({ stock_quantity: newTotal })
+                            .eq('id', item.variant_id);
+                    }
+                }
+                else if (item.variant_id) {
+                    // No inventory row yet — decrement directly on the variant
+                    const { data: variant } = await supabaseAdmin
+                        .from('product_variants')
+                        .select('stock_quantity')
+                        .eq('id', item.variant_id)
+                        .maybeSingle();
+                    if (variant) {
+                        const v = variant;
+                        const newQty = Math.max(0, (v.stock_quantity ?? 0) - item.quantity);
+                        await supabaseAdmin
+                            .from('product_variants')
+                            .update({ stock_quantity: newQty })
+                            .eq('id', item.variant_id);
+                        // Create an inventory row so future decrements use the table
+                        await supabaseAdmin.from('inventory').upsert({
+                            product_id: item.product_id,
+                            variant_id: item.variant_id,
+                            total_stock: newQty,
+                        }, { onConflict: 'product_id,variant_id' });
+                    }
                 }
             }
             catch {
@@ -118,6 +150,14 @@ async function handlePaymentConfirmed(opts) {
                     ...templates.paymentConfirmed(od.order_number, od.total_amount, name, emailItems, od.shipping_address ?? undefined, od.discount_amount ?? 0, od.placed_at ?? undefined),
                 }).catch(() => { });
             }
+            // ── Admin email notification ─────────────────────────────────────────
+            if (env.ADMIN_EMAIL) {
+                const customerPhone = od.shipping_address?.phone ?? '';
+                sendEmail({
+                    to: [{ email: env.ADMIN_EMAIL, name: 'MeAndMine Admin' }],
+                    ...templates.adminOrderNotification(od.order_number, od.total_amount, name, email ?? '', customerPhone, emailItems, od.shipping_address ?? undefined, od.discount_amount ?? 0),
+                }).catch(() => { });
+            }
             // ── Admin Telegram notification ──────────────────────────────────────
             const fmt = (n) => `KES ${Number(n).toLocaleString('en-KE', { minimumFractionDigits: 2 })}`;
             const addr = od.shipping_address
@@ -159,6 +199,19 @@ async function handlePaymentConfirmed(opts) {
         // Notification failure must never break the payment confirmation response
     }
     paymentsProcessedTotal.inc({ provider: 'paystack', status: 'paid' });
+    // Audit trail for every successful payment
+    logAudit({
+        actorId: userId,
+        actorRole: 'customer',
+        action: 'payment.confirmed',
+        resourceType: 'order',
+        resourceId: orderId,
+        details: {
+            paymentId,
+            paymentMethod,
+            paidAt,
+        },
+    });
 }
 // ─── Public service functions ─────────────────────────────────────────────────
 export async function initializePayment(userId, orderId) {

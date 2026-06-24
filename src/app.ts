@@ -27,6 +27,7 @@ import uploadRoutes       from './upload/upload.routes.js';
 import adminRoutes        from './admin/admin.routes.js';
 import analyticsRoutes    from './analytics/analytics.routes.js';
 import promotionRoutes    from './promotions/promotions.routes.js';
+import superadminRoutes   from './superadmin/superadmin.routes.js';
 
 const app = new Hono<AppEnv>();
 
@@ -94,6 +95,7 @@ api.route('/upload',        uploadRoutes);
 api.route('/admin',         adminRoutes);
 api.route('/analytics',     analyticsRoutes);
 api.route('/promotions',    promotionRoutes);
+api.route('/superadmin',    superadminRoutes);
 
 app.route('/api/v1', api);
 

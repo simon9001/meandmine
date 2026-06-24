@@ -44,7 +44,8 @@ export const requireRole = (...roles: UserRole[]) =>
     await next();
   });
 
-export const requireAdmin = requireRole('admin', 'superadmin');
+export const requireAdmin      = requireRole('admin', 'superadmin');
+export const requireSuperAdmin = requireRole('superadmin');
 
 // Silently attaches user to context if a valid auth token is present.
 // Does NOT reject the request — safe to use on public/guest routes that also support auth.

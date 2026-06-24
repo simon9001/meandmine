@@ -216,6 +216,7 @@ function buildProductDetail(raw, mediaList, variants, badges) {
             name: v.name,
             options: v.options,
             additionalPrice: Number(v.additional_price ?? 0),
+            stockQuantity: v.stock_quantity != null ? Number(v.stock_quantity) : undefined,
             isActive: v.is_active,
             sku: (v.sku ?? undefined),
         })),
@@ -423,12 +424,62 @@ export async function createProductVariant(productId, payload) {
     if (error || !data)
         throw new BadRequestError(error?.message ?? 'Create variant failed');
     const v = data;
-    // Invalidate product cache so the new variant shows up immediately
+    // Sync to inventory table so the inventory page reflects the initial stock
+    await supabaseAdmin.from('inventory').upsert({
+        product_id: productId,
+        variant_id: v.id,
+        total_stock: payload.stockQuantity ?? 0,
+        last_restocked: new Date().toISOString(),
+    }, { onConflict: 'product_id,variant_id' });
     const { data: p } = await supabaseAdmin.from('products').select('slug').eq('id', productId).single();
     const slug = p?.slug;
     if (slug)
         await cacheDel(buildKey('products:slug', slug));
     return { id: v.id, name: v.name, options: v.options, additionalPrice: Number(v.additional_price) };
+}
+export async function updateProductVariant(productId, variantId, payload) {
+    const updates = {};
+    if (payload.name !== undefined)
+        updates.name = payload.name;
+    if (payload.sku !== undefined)
+        updates.sku = payload.sku;
+    if (payload.options !== undefined)
+        updates.options = payload.options;
+    if (payload.additionalPrice !== undefined)
+        updates.additional_price = payload.additionalPrice;
+    if (payload.stockQuantity !== undefined)
+        updates.stock_quantity = payload.stockQuantity;
+    if (payload.isActive !== undefined)
+        updates.is_active = payload.isActive;
+    const { data, error } = await supabaseAdmin
+        .from('product_variants')
+        .update(updates)
+        .eq('id', variantId)
+        .eq('product_id', productId)
+        .select('id, name, options, additional_price, stock_quantity, sku, is_active')
+        .single();
+    if (error || !data)
+        throw new NotFoundError('Variant');
+    const v = data;
+    // Sync stock change to inventory table
+    if (payload.stockQuantity !== undefined) {
+        await supabaseAdmin.from('inventory').upsert({
+            product_id: productId,
+            variant_id: variantId,
+            total_stock: payload.stockQuantity,
+            last_restocked: new Date().toISOString(),
+        }, { onConflict: 'product_id,variant_id' });
+    }
+    const { data: p } = await supabaseAdmin.from('products').select('slug').eq('id', productId).single();
+    const slug = p?.slug;
+    if (slug)
+        await cacheDel(buildKey('products:slug', slug));
+    return {
+        id: v.id, name: v.name, options: v.options,
+        additionalPrice: Number(v.additional_price),
+        stockQuantity: v.stock_quantity != null ? Number(v.stock_quantity) : undefined,
+        sku: v.sku ?? undefined, isActive: v.is_active,
+    };
 }
 export async function deleteProductVariant(productId, variantId) {
     const { error } = await supabaseAdmin

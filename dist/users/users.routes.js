@@ -12,5 +12,8 @@ router.patch('/addresses/:addressId', requireAuth, ctrl.updateAddress);
 router.delete('/addresses/:addressId', requireAuth, ctrl.deleteAddress);
 // Admin — user management
 router.get('/', requireAuth, requireAdmin, ctrl.listUsers);
+router.post('/', requireAuth, requireAdmin, ctrl.adminCreateUser);
 router.patch('/:userId/role', requireAuth, requireAdmin, ctrl.setUserRole);
+router.patch('/:userId', requireAuth, requireAdmin, ctrl.adminUpdateUser);
+router.delete('/:userId', requireAuth, requireAdmin, ctrl.adminDeleteUser);
 export default router;

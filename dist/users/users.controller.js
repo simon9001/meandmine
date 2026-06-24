@@ -66,7 +66,35 @@ export async function listUsers(c) {
 }
 export async function setUserRole(c) {
     const actor = c.get('user');
-    const { role } = z.object({ role: z.enum(['customer', 'admin', 'superadmin', 'supplier_rep']) })
+    const { role } = z.object({ role: z.enum(['customer', 'admin', 'supplier_rep']) })
         .parse(await c.req.json());
-    return ok(c, await usersService.setUserRole(actor.id, c.req.param('userId'), role));
+    return ok(c, await usersService.setUserRole(actor.id, actor.email, c.req.param('userId'), role));
+}
+export async function adminUpdateUser(c) {
+    const actor = c.get('user');
+    const body = z.object({
+        firstName: z.string().min(1).max(100).optional(),
+        lastName: z.string().min(1).max(100).optional(),
+        phone: z.string().max(30).nullable().optional(),
+        isActive: z.boolean().optional(),
+        role: z.enum(['customer', 'admin', 'supplier_rep']).optional(),
+    }).parse(await c.req.json());
+    return ok(c, await usersService.adminUpdateUser(actor.id, c.req.param('userId'), body));
+}
+export async function adminDeleteUser(c) {
+    const actor = c.get('user');
+    await usersService.adminDeleteUser(actor.id, actor.role, c.req.param('userId'));
+    return noContent(c);
+}
+export async function adminCreateUser(c) {
+    const actor = c.get('user');
+    const body = z.object({
+        email: z.string().email(),
+        password: z.string().min(8),
+        firstName: z.string().min(1).max(100),
+        lastName: z.string().min(1).max(100),
+        role: z.enum(['customer', 'admin', 'supplier_rep']),
+        phone: z.string().max(30).optional(),
+    }).parse(await c.req.json());
+    return ok(c, await usersService.adminCreateUser(actor.id, actor.email, body), 201);
 }

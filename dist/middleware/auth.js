@@ -37,6 +37,7 @@ export const requireRole = (...roles) => createMiddleware(async (c, next) => {
     await next();
 });
 export const requireAdmin = requireRole('admin', 'superadmin');
+export const requireSuperAdmin = requireRole('superadmin');
 // Silently attaches user to context if a valid auth token is present.
 // Does NOT reject the request — safe to use on public/guest routes that also support auth.
 export const optionalAuth = createMiddleware(async (c, next) => {
