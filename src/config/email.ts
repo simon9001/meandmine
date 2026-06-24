@@ -276,6 +276,128 @@ export const templates = {
     };
   },
 
+  adminOrderNotification: (
+    orderNumber: string,
+    total: number,
+    customerName: string,
+    customerEmail: string,
+    customerPhone: string,
+    items: { name: string; quantity: number; price: number }[],
+    delivery?: {
+      recipientName?: string;
+      phone?: string;
+      county?: string;
+      town?: string;
+      stage?: string;
+      deliveryMethod?: string;
+      instructions?: string;
+    },
+    discount?: number,
+  ) => {
+    const fmt = (n: number) => `KES ${n.toLocaleString('en-KE', { minimumFractionDigits: 2 })}`;
+    const subtotal = items.reduce((s, i) => s + i.price * i.quantity, 0);
+    const deliveryLabel = delivery?.deliveryMethod === 'pickup' ? 'Self Pickup' : 'Home Delivery';
+    const deliveryAddr = delivery
+      ? [delivery.town, delivery.county, delivery.stage].filter(Boolean).join(', ')
+      : '';
+    const waLink = `https://wa.me/${(customerPhone || '').replace(/[^0-9]/g, '').replace(/^0/, '254')}`;
+    const dateStr = new Date().toLocaleString('en-KE', { timeZone: 'Africa/Nairobi', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+    return {
+      subject: `🛍️ New Order ${orderNumber} — ${fmt(total)}`,
+      html: `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f6;padding:32px 16px">
+  <tr><td align="center">
+  <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%">
+
+    <!-- Header -->
+    <tr><td style="background:linear-gradient(135deg,#1a3828 0%,#2d5016 100%);border-radius:16px 16px 0 0;padding:28px 36px">
+      <p style="margin:0;font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#a3c4a8">MeAndMine Admin</p>
+      <h1 style="margin:8px 0 4px;font-size:22px;font-weight:800;color:#ffffff">🛍️ New Order Received</h1>
+      <p style="margin:0;font-size:13px;color:#a3c4a8">${orderNumber} · ${dateStr}</p>
+    </td></tr>
+
+    <!-- Customer info -->
+    <tr><td style="background:#ffffff;padding:24px 36px;border-bottom:1px solid #f3f4f6">
+      <p style="margin:0 0 12px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#6b7280">Customer</p>
+      <table cellpadding="0" cellspacing="0" style="font-size:13px">
+        <tr><td style="padding:3px 0;color:#6b7280;width:100px">Name</td><td style="padding:3px 0;color:#111827;font-weight:600">${customerName || '—'}</td></tr>
+        <tr><td style="padding:3px 0;color:#6b7280">Email</td><td style="padding:3px 0"><a href="mailto:${customerEmail}" style="color:#1a3828">${customerEmail}</a></td></tr>
+        <tr><td style="padding:3px 0;color:#6b7280">Phone</td><td style="padding:3px 0;color:#111827">${customerPhone || delivery?.phone || '—'}</td></tr>
+      </table>
+      ${customerPhone || delivery?.phone ? `
+      <a href="${waLink}"
+         style="display:inline-block;margin-top:12px;padding:8px 20px;background:#25D366;color:#ffffff;text-decoration:none;border-radius:6px;font-weight:700;font-size:13px">
+        💬 WhatsApp Customer
+      </a>` : ''}
+    </td></tr>
+
+    <!-- Items -->
+    <tr><td style="background:#ffffff;padding:24px 36px 0">
+      <p style="margin:0 0 12px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#6b7280">Items Ordered</p>
+      <table width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;border-collapse:collapse">
+        <tr style="background:#f9fafb">
+          <th style="text-align:left;padding:10px 12px;border-bottom:2px solid #e5e7eb;color:#374151;font-weight:600">Product</th>
+          <th style="text-align:center;padding:10px 12px;border-bottom:2px solid #e5e7eb;color:#374151;font-weight:600">Qty</th>
+          <th style="text-align:right;padding:10px 12px;border-bottom:2px solid #e5e7eb;color:#374151;font-weight:600">Amount</th>
+        </tr>
+        ${items.map((i, idx) => `
+        <tr style="background:${idx % 2 === 0 ? '#ffffff' : '#fafafa'}">
+          <td style="padding:10px 12px;border-bottom:1px solid #f3f4f6;color:#111827">${i.name}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #f3f4f6;text-align:center;color:#374151">${i.quantity}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #f3f4f6;text-align:right;font-weight:600;color:#111827">${fmt(i.price * i.quantity)}</td>
+        </tr>`).join('')}
+        ${discount && discount > 0 ? `
+        <tr>
+          <td colspan="2" style="padding:8px 12px;color:#15803d;font-size:12px">Discount</td>
+          <td style="padding:8px 12px;text-align:right;color:#15803d">− ${fmt(discount)}</td>
+        </tr>` : ''}
+        <tr style="background:#1a3828">
+          <td colspan="2" style="padding:12px;font-weight:700;color:#ffffff">Total Paid</td>
+          <td style="padding:12px;font-weight:800;font-size:15px;color:#c47b2a;text-align:right">${fmt(total)}</td>
+        </tr>
+      </table>
+    </td></tr>
+
+    <!-- Delivery -->
+    ${delivery ? `
+    <tr><td style="background:#ffffff;padding:24px 36px">
+      <p style="margin:0 0 12px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#6b7280">Delivery Details</p>
+      <table cellpadding="0" cellspacing="0" style="background:#f9fafb;border-radius:8px;padding:16px;font-size:13px;width:100%">
+        <tr><td style="padding:4px 0;color:#6b7280;width:120px">Method</td><td style="padding:4px 0;color:#111827;font-weight:600">${deliveryLabel}</td></tr>
+        <tr><td style="padding:4px 0;color:#6b7280">Recipient</td><td style="padding:4px 0;color:#111827">${delivery.recipientName || customerName}</td></tr>
+        <tr><td style="padding:4px 0;color:#6b7280">Phone</td><td style="padding:4px 0;color:#111827">${delivery.phone || '—'}</td></tr>
+        ${deliveryAddr ? `<tr><td style="padding:4px 0;color:#6b7280">Location</td><td style="padding:4px 0;color:#111827">${deliveryAddr}</td></tr>` : ''}
+        ${delivery.instructions ? `<tr><td style="padding:4px 0;color:#6b7280">Notes</td><td style="padding:4px 0;color:#111827">${delivery.instructions}</td></tr>` : ''}
+      </table>
+    </td></tr>` : ''}
+
+    <!-- Action button -->
+    <tr><td style="background:#ffffff;padding:0 36px 32px;text-align:center">
+      <a href="${env.FRONTEND_URL}/admin/orders"
+         style="display:inline-block;padding:12px 28px;background:#1a3828;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:700;font-size:14px">
+        View in Admin Dashboard →
+      </a>
+    </td></tr>
+
+    <!-- Footer -->
+    <tr><td style="background:#f9fafb;border-top:1px solid #e5e7eb;border-radius:0 0 16px 16px;padding:20px 36px;text-align:center">
+      <p style="margin:0;font-size:11px;color:#9ca3af">MeAndMine.shop Admin Notification · Order ${orderNumber}</p>
+    </td></tr>
+
+  </table>
+  </td></tr>
+</table>
+</body>
+</html>`,
+      text: `New Order ${orderNumber}\n\nCustomer: ${customerName} (${customerEmail})\nPhone: ${customerPhone || delivery?.phone || '—'}\n\nItems:\n${items.map((i) => `  • ${i.name} × ${i.quantity}  —  ${fmt(i.price * i.quantity)}`).join('\n')}\n\nTotal: ${fmt(total)}\nDelivery: ${deliveryLabel} · ${deliveryAddr}\n\nView order: ${env.FRONTEND_URL}/admin/orders`,
+    };
+  },
+
   orderStatusUpdate: (orderNumber: string, status: string, customerName = '') => ({
     subject: `Order Update — ${orderNumber}`,
     html: `

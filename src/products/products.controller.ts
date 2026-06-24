@@ -112,6 +112,18 @@ export async function createProductVariant(c: Context<AppEnv>) {
   return ok(c, await svc.createProductVariant(c.req.param('productId')!, body), 201);
 }
 
+export async function updateProductVariant(c: Context<AppEnv>) {
+  const body = z.object({
+    name:            z.string().min(1).optional(),
+    sku:             z.string().nullable().optional(),
+    options:         z.record(z.string(), z.string()).optional(),
+    additionalPrice: z.number().min(0).optional(),
+    stockQuantity:   z.number().int().min(0).optional(),
+    isActive:        z.boolean().optional(),
+  }).parse(await c.req.json());
+  return ok(c, await svc.updateProductVariant(c.req.param('productId')!, c.req.param('variantId')!, body));
+}
+
 export async function deleteProductVariant(c: Context<AppEnv>) {
   await svc.deleteProductVariant(c.req.param('productId')!, c.req.param('variantId')!);
   return noContent(c);

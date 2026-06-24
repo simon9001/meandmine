@@ -72,6 +72,7 @@ async function handlePaymentConfirmed(opts: {
 
     for (const item of orderItems) {
       try {
+        // Update inventory table
         const { data: inv } = await supabaseAdmin
           .from('inventory')
           .select('id, total_stock, reserved_stock')
@@ -81,13 +82,45 @@ async function handlePaymentConfirmed(opts: {
 
         if (inv) {
           const row = inv as { id: string; total_stock: number; reserved_stock: number };
+          const newTotal = Math.max(0, row.total_stock - item.quantity);
           await supabaseAdmin
             .from('inventory')
             .update({
-              total_stock:    Math.max(0, row.total_stock    - item.quantity),
+              total_stock:    newTotal,
               reserved_stock: Math.max(0, row.reserved_stock - item.quantity),
             })
             .eq('id', row.id);
+
+          // Keep product_variants.stock_quantity in sync
+          if (item.variant_id) {
+            await supabaseAdmin
+              .from('product_variants')
+              .update({ stock_quantity: newTotal })
+              .eq('id', item.variant_id);
+          }
+        } else if (item.variant_id) {
+          // No inventory row yet — decrement directly on the variant
+          const { data: variant } = await supabaseAdmin
+            .from('product_variants')
+            .select('stock_quantity')
+            .eq('id', item.variant_id)
+            .maybeSingle();
+
+          if (variant) {
+            const v = variant as { stock_quantity: number | null };
+            const newQty = Math.max(0, (v.stock_quantity ?? 0) - item.quantity);
+            await supabaseAdmin
+              .from('product_variants')
+              .update({ stock_quantity: newQty })
+              .eq('id', item.variant_id);
+
+            // Create an inventory row so future decrements use the table
+            await supabaseAdmin.from('inventory').upsert({
+              product_id:  item.product_id,
+              variant_id:  item.variant_id,
+              total_stock: newQty,
+            }, { onConflict: 'product_id,variant_id' });
+          }
         }
       } catch {
         // Inventory decrement is non-critical — log and continue
@@ -164,6 +197,24 @@ async function handlePaymentConfirmed(opts: {
             od.shipping_address ?? undefined,
             od.discount_amount ?? 0,
             od.placed_at ?? undefined,
+          ),
+        }).catch(() => {});
+      }
+
+      // ── Admin email notification ─────────────────────────────────────────
+      if (env.ADMIN_EMAIL) {
+        const customerPhone = od.shipping_address?.phone ?? '';
+        sendEmail({
+          to: [{ email: env.ADMIN_EMAIL, name: 'MeAndMine Admin' }],
+          ...templates.adminOrderNotification(
+            od.order_number,
+            od.total_amount,
+            name,
+            email ?? '',
+            customerPhone,
+            emailItems,
+            od.shipping_address ?? undefined,
+            od.discount_amount ?? 0,
           ),
         }).catch(() => {});
       }
