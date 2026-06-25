@@ -32,11 +32,30 @@ export async function getCart(userId?: string, sessionId?: string) {
     .select('id, product_id, variant_id, supply_id, quantity, unit_price, products(id, name, slug, base_price, sale_price, status, product_media!product_id(url, is_primary)), product_variants(id, name, options, additional_price)')
     .eq('cart_id', cart.id);
 
-  const subtotal = (items ?? []).reduce(
-    (sum, i) => sum + (i as { quantity: number; unit_price: number }).quantity * (i as { unit_price: number }).unit_price,
+  // Recompute unit_price from LIVE product data on every cart fetch.
+  // This ensures the cart always reflects the current sale price, even for
+  // items that were added before the sale was set (stale stored unit_price).
+  type RawItem = Record<string, unknown>;
+  const enriched = (items ?? []).map((item) => {
+    const i       = item as RawItem;
+    const prod    = i.products    as { base_price?: number; sale_price?: number | null } | null;
+    const variant = i.product_variants as { additional_price?: number } | null;
+    if (!prod) return i;
+
+    const base          = Number(prod.base_price ?? 0);
+    const sale          = prod.sale_price ? Number(prod.sale_price) : 0;
+    const effectiveBase = (sale > 0 && sale < base) ? sale : base;
+    const livePrice     = effectiveBase + Number(variant?.additional_price ?? 0);
+
+    return { ...i, unit_price: livePrice };
+  });
+
+  const subtotal = enriched.reduce(
+    (sum, i) => sum + (i as RawItem & { quantity: number; unit_price: number }).quantity
+                    * (i as RawItem & { unit_price: number }).unit_price,
     0,
   );
-  return { id: cart.id, items: items ?? [], subtotal };
+  return { id: cart.id, items: enriched, subtotal };
 }
 
 export async function addToCart(payload: {
