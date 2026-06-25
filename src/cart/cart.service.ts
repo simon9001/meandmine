@@ -40,7 +40,7 @@ export async function getCart(userId?: string, sessionId?: string) {
 }
 
 export async function addToCart(payload: {
-  userId?: string; sessionId?: string;
+  userId?: string; sessionId?: string; userRole?: string;
   productId: string; variantId?: string; supplyId?: string; quantity: number;
 }) {
   const cartId = await getOrCreateCart(payload.userId, payload.sessionId);
@@ -50,7 +50,11 @@ export async function addToCart(payload: {
     .select('base_price, sale_price, status')
     .eq('id', payload.productId)
     .single();
-  if (!product || (product as { status: string }).status !== 'active') throw new NotFoundError('Product');
+
+  const isAdmin = payload.userRole === 'admin' || payload.userRole === 'superadmin';
+  if (!product || (!isAdmin && (product as { status: string }).status !== 'active')) {
+    throw new NotFoundError('Product');
+  }
 
   const p = product as { sale_price: number | null; base_price: number };
   let unitPrice = (p.sale_price && p.sale_price > 0) ? Number(p.sale_price) : Number(p.base_price);

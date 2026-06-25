@@ -33,7 +33,10 @@ function setAuthCookies(
   session: { access_token: string; refresh_token: string; expires_in?: number },
 ) {
   const base = { httpOnly: true, secure: isProd, sameSite: (isProd ? 'None' : 'Lax') as 'None' | 'Lax', path: '/' };
-  setCookie(c, 'access_token',  session.access_token,  { ...base, maxAge: session.expires_in ?? 3600 });
+  // Cap access token cookie at 15 min regardless of JWT expiry.
+  // The frontend auto-refresh (baseApi.ts) silently re-issues it on 401,
+  // so users never notice. Limits the damage window if the token leaks.
+  setCookie(c, 'access_token',  session.access_token,  { ...base, maxAge: Math.min(session.expires_in ?? 900, 900) });
   setCookie(c, 'refresh_token', session.refresh_token, { ...base, maxAge: 60 * 60 * 24 * 7 });
 }
 

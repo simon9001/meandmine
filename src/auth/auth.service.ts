@@ -12,13 +12,81 @@ function anonClient() {
   });
 }
 
+// ─── Per-email login brute-force protection ───────────────────────────────────
+// Complements the IP-based rate limiter on the route: that stops floods from
+// one IP; this stops distributed attacks targeting one account from many IPs.
+// 5 failures within a window → 15-minute lockout for that email address.
+
+const _loginAttempts = new Map<string, { failures: number; lockedUntil: number }>();
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of _loginAttempts) if (v.lockedUntil > 0 && v.lockedUntil <= now) _loginAttempts.delete(k);
+}, 10 * 60_000);
+
+function _checkLoginLock(email: string): void {
+  const rec = _loginAttempts.get(email.toLowerCase());
+  if (rec && Date.now() < rec.lockedUntil) {
+    const mins = Math.ceil((rec.lockedUntil - Date.now()) / 60_000);
+    throw new UnauthorizedError(`Too many failed attempts. Try again in ${mins} minute${mins === 1 ? '' : 's'}.`);
+  }
+}
+
+function _recordLoginFailure(email: string): void {
+  const key = email.toLowerCase();
+  const rec = _loginAttempts.get(key) ?? { failures: 0, lockedUntil: 0 };
+  rec.failures++;
+  if (rec.failures >= 5) {
+    rec.lockedUntil = Date.now() + 15 * 60_000;
+    rec.failures = 0; // reset so counter restarts after lockout lifts
+  }
+  _loginAttempts.set(key, rec);
+}
+
+function _clearLoginLock(email: string): void {
+  _loginAttempts.delete(email.toLowerCase());
+}
+
+// ─── Per-email OTP rate limit ─────────────────────────────────────────────────
+// Stops an attacker with many IPs from brute-forcing a known email's OTP.
+// Max 5 attempts per email per 15 minutes.
+
+const _otpAttempts = new Map<string, { tries: number; resetAt: number }>();
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of _otpAttempts) if (v.resetAt <= now) _otpAttempts.delete(k);
+}, 10 * 60_000);
+
+function _checkOtpLimit(email: string): void {
+  const key = email.toLowerCase();
+  const rec = _otpAttempts.get(key);
+  if (rec && Date.now() < rec.resetAt && rec.tries >= 5) {
+    const mins = Math.ceil((rec.resetAt - Date.now()) / 60_000);
+    throw new BadRequestError(`Too many attempts. Try again in ${mins} minute${mins === 1 ? '' : 's'}.`);
+  }
+}
+
+function _recordOtpAttempt(email: string): void {
+  const key = email.toLowerCase();
+  const now = Date.now();
+  const rec = _otpAttempts.get(key);
+  if (!rec || now >= rec.resetAt) {
+    _otpAttempts.set(key, { tries: 1, resetAt: now + 15 * 60_000 });
+  } else {
+    rec.tries++;
+  }
+}
+
+function _clearOtpAttempts(email: string): void {
+  _otpAttempts.delete(email.toLowerCase());
+}
+
 function makeOtp(): string {
   return randomInt(100000, 1000000).toString();
 }
 
 async function issueOtp(email: string, userId: string, name: string): Promise<string> {
   const otp = makeOtp();
-  const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString(); // 10 min — industry standard for 6-digit OTPs
 
   await supabaseAdmin.from('email_otps').delete().eq('email', email);
   const { error } = await supabaseAdmin.from('email_otps').insert({
@@ -126,6 +194,9 @@ export async function resendVerification(email: string) {
 // ─── Verify OTP ───────────────────────────────────────────────────────────────
 
 export async function verifyOtp(email: string, otp: string) {
+  _checkOtpLimit(email);   // throws if too many attempts for this email
+  _recordOtpAttempt(email); // count this attempt before hitting the DB
+
   const { data: row, error } = await supabaseAdmin
     .from('email_otps')
     .select('otp, expires_at, user_id, user_name')
@@ -142,6 +213,8 @@ export async function verifyOtp(email: string, otp: string) {
 
   const userId = row.user_id as string;
   const name   = (row.user_name as string) ?? '';
+
+  _clearOtpAttempts(email); // correct code — wipe the attempt counter
 
   await supabaseAdmin.auth.admin.updateUserById(userId, { email_confirm: true });
   await supabaseAdmin.from('email_otps').delete().eq('email', email);
@@ -180,6 +253,8 @@ export async function verifyOtp(email: string, otp: string) {
 // ─── Login ────────────────────────────────────────────────────────────────────
 
 export async function login(email: string, password: string) {
+  _checkLoginLock(email); // throws if this email is currently locked out
+
   const client = anonClient();
   const { data, error } = await client.auth.signInWithPassword({ email, password });
 
@@ -188,24 +263,18 @@ export async function login(email: string, password: string) {
     if (msg.includes('email not confirmed') || msg.includes('not confirmed')) {
       throw new UnauthorizedError('EMAIL_NOT_VERIFIED');
     }
-    await incrementFailedLogin(email);
+    _recordLoginFailure(email); // 5 failures → 15-min lockout
     throw new UnauthorizedError('Invalid email or password');
   }
 
-  // Reset failed login counter
+  _clearLoginLock(email); // success — wipe any previous failure count
+
   await supabaseAdmin
     .from('user_profiles')
     .update({ last_login_at: new Date().toISOString() })
     .eq('id', data.user.id);
 
   return data.session;
-}
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-async function incrementFailedLogin(_email: string) {
-  // Placeholder: track brute-force attempts here once a failed_login_count
-  // column is added to user_profiles. The previous implementation incorrectly
-  // nulled last_login_at and fetched all users, which was both wrong and slow.
 }
 
 // ─── Logout ───────────────────────────────────────────────────────────────────

@@ -17,13 +17,14 @@ export async function getCart(c: Context<AppEnv>) {
 
 export async function addToCart(c: Context<AppEnv>) {
   const { userId, sessionId } = getIdentity(c);
+  const userRole = c.get('user')?.role;
   const body = z.object({
     productId: z.string().uuid(),
     variantId: z.string().uuid().optional(),
     supplyId:  z.string().uuid().optional(),
     quantity:  z.number().int().min(1).default(1),
   }).parse(await c.req.json());
-  return ok(c, await svc.addToCart({ ...body, userId, sessionId }));
+  return ok(c, await svc.addToCart({ ...body, userId, sessionId, userRole }));
 }
 
 export async function updateCartItem(c: Context<AppEnv>) {
