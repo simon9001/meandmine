@@ -18,8 +18,12 @@ export function sensitiveRateLimit() { return rateLimit(3, 15 * 60_000); }
 
 export function rateLimit(max = env.RATE_LIMIT_MAX, windowMs = env.RATE_LIMIT_WINDOW_MS) {
   return createMiddleware<AppEnv>(async (c, next) => {
+    // Take the rightmost (last) IP from x-forwarded-for — that's what the
+    // trusted reverse proxy appended. The leftmost entry can be set by the
+    // client and is trivially spoofed to bypass rate limiting.
+    const forwarded = c.req.header('x-forwarded-for');
     const ip =
-      c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ??
+      (forwarded ? forwarded.split(',').at(-1)?.trim() : undefined) ??
       c.req.header('x-real-ip') ??
       'unknown';
 

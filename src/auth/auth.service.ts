@@ -1,3 +1,4 @@
+import { randomInt } from 'crypto';
 import { createClient } from '@supabase/supabase-js';
 import { supabaseAdmin } from '../config/db.js';
 import { env } from '../config/env.js';
@@ -12,7 +13,7 @@ function anonClient() {
 }
 
 function makeOtp(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString();
+  return randomInt(100000, 1000000).toString();
 }
 
 async function issueOtp(email: string, userId: string, name: string): Promise<string> {
@@ -49,7 +50,7 @@ export async function register(email: string, password: string, firstName: strin
       const existing = users.find((u) => u.email?.toLowerCase() === email.toLowerCase());
 
       if (existing && !existing.email_confirmed_at) {
-        // Update the password in case they typed a different one this time
+        // Unconfirmed — update password and resend OTP silently
         await supabaseAdmin.auth.admin.updateUserById(existing.id, { password });
 
         const otp = await issueOtp(email, existing.id, name);
@@ -61,7 +62,20 @@ export async function register(email: string, password: string, firstName: strin
         return existing;
       }
 
-      throw new BadRequestError('Email already in use');
+      // Confirmed account: don't reveal that this email is registered —
+      // return the same generic "check your email" flow to prevent enumeration.
+      // Fire-and-forget a "someone tried to register with your email" warning.
+      const confirmedUser = users.find((u) => u.email?.toLowerCase() === email.toLowerCase());
+      if (confirmedUser) {
+        sendEmail({
+          to: [{ email, name: (confirmedUser.user_metadata?.name as string) ?? '' }],
+          subject: 'Someone tried to create an account using your email',
+          html: `<p>Someone attempted to create a new MeAndMine.shop account with your email address. If this was you, please <a href="${env.FRONTEND_URL}/auth/login">sign in</a> instead. If it wasn't you, you can safely ignore this email.</p>`,
+          text: `Someone attempted to create a new MeAndMine.shop account with your email address. If this was you, please sign in at ${env.FRONTEND_URL}/auth/login instead.`,
+        }).catch(() => {});
+      }
+      // Return the same shape as a successful registration — front-end shows "check your email"
+      return { id: '', email } as { id: string; email: string };
     }
 
     throw new BadRequestError(error.message);
