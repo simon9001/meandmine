@@ -94,12 +94,18 @@ export async function updateCategory(id: string, payload: Partial<{
   const { data, error } = await supabaseAdmin
     .from('categories').update(updates).eq('id', id).select().single();
   if (error || !data) throw new NotFoundError('Category');
-  await cacheDelPattern('maschon:categories:*');
+  await Promise.all([
+    cacheDelPattern('maschon:categories:*'),
+    cacheDelPattern('maschon:products:list:*'),
+  ]);
   return data;
 }
 
 export async function deleteCategory(id: string) {
   const { error } = await supabaseAdmin.from('categories').delete().eq('id', id);
   if (error) throw new BadRequestError(error.message);
-  await cacheDelPattern('maschon:categories:*');
+  await Promise.all([
+    cacheDelPattern('maschon:categories:*'),
+    cacheDelPattern('maschon:products:list:*'),
+  ]);
 }
