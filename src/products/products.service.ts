@@ -161,9 +161,14 @@ export async function getProductBySlug(slug: string) {
   if (cached) return cached;
 
   const { data, error } = await supabaseAdmin
-    .from('v_product_page')
-    .select('*')
+    .from('products')
+    .select(`
+      *,
+      categories(id, name, slug),
+      brands(id, name, slug)
+    `)
     .eq('slug', slug)
+    .eq('status', 'active')
     .single();
   if (error || !data) throw new NotFoundError('Product');
 
