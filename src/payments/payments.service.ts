@@ -6,6 +6,7 @@ import { sendEmail, templates } from '../config/email.js';
 import { sendTelegramMessage } from '../config/telegram.js';
 import { NotFoundError, BadRequestError, UnprocessableError } from '../utils/errors.js';
 import { logAudit } from '../superadmin/audit.js';
+import { logger } from '../config/logger.js';
 
 const PAYSTACK_BASE = 'https://api.paystack.co';
 
@@ -19,8 +20,60 @@ async function paystackRequest(path: string, method = 'GET', body?: Record<strin
     body: body ? JSON.stringify(body) : undefined,
   });
   const json = await res.json() as { status: boolean; message: string; data: unknown };
-  if (!json.status) throw new UnprocessableError(json.message ?? 'Paystack error');
+  if (!json.status) {
+    const raw = json.message ?? 'Paystack error';
+    // "Charge attempted" is Paystack's opaque rejection for M-Pesa (rate-limit, phone blocked, etc.)
+    const friendly = raw === 'Charge attempted'
+      ? 'M-Pesa payment could not be initiated. Please try again in a few minutes or use a different phone number.'
+      : raw;
+    throw new UnprocessableError(friendly);
+  }
   return json.data;
+}
+
+// Builds Paystack custom_fields for the receipt email the customer receives from Paystack.
+// custom_fields appear on Paystack's own payment receipt under "Additional Information".
+async function buildPaystackCustomFields(orderId: string, orderNumber: string) {
+  const [{ data: items }, { data: orderRow }] = await Promise.all([
+    supabaseAdmin
+      .from('order_items')
+      .select('product_name, quantity, unit_price')
+      .eq('order_id', orderId),
+    supabaseAdmin
+      .from('orders')
+      .select('shipping_address, discount_amount, total_amount')
+      .eq('id', orderId)
+      .single(),
+  ]);
+
+  type Item = { product_name: string; quantity: number; unit_price: number };
+  type OrderRow = { shipping_address: { recipientName?: string; stage?: string; town?: string; county?: string; deliveryMethod?: string } | null; discount_amount: number; total_amount: number };
+
+  const fmt = (n: number) => `KES ${Number(n).toLocaleString('en-KE', { minimumFractionDigits: 2 })}`;
+
+  const itemLines = (items as Item[] ?? [])
+    .map((i) => `${i.product_name} ×${i.quantity}  ${fmt(i.unit_price * i.quantity)}`)
+    .join(' | ');
+
+  const ord = orderRow as OrderRow | null;
+  const sa  = ord?.shipping_address;
+  const addr = [sa?.recipientName, sa?.stage, sa?.town, sa?.county].filter(Boolean).join(', ');
+  const method = sa?.deliveryMethod === 'pickup' ? 'Self Pickup' : 'Home Delivery';
+
+  const fields: { display_name: string; variable_name: string; value: string }[] = [
+    { display_name: 'Order Number',    variable_name: 'order_number', value: orderNumber },
+  ];
+  if (itemLines) fields.push({ display_name: 'Items Ordered',   variable_name: 'items',    value: itemLines });
+  if (addr)      fields.push({ display_name: 'Delivery Address', variable_name: 'delivery', value: addr });
+                 fields.push({ display_name: 'Delivery Method',  variable_name: 'method',   value: method });
+  if (ord && ord.discount_amount > 0) {
+    fields.push({ display_name: 'Discount Applied', variable_name: 'discount', value: `- ${fmt(ord.discount_amount)}` });
+  }
+  if (ord) {
+    fields.push({ display_name: 'Order Total', variable_name: 'total', value: fmt(ord.total_amount) });
+  }
+
+  return fields;
 }
 
 // ─── Shared post-payment logic ────────────────────────────────────────────────
@@ -59,12 +112,29 @@ async function handlePaymentConfirmed(opts: {
     changed_at:  paidAt,
   });
 
-  // Fetch order details (number, total, line items, delivery) for inventory + notifications
-  const { data: orderData } = await supabaseAdmin
+  // Fetch order details (number, total, delivery) for inventory + notifications
+  const { data: orderRow, error: orderRowError } = await supabaseAdmin
     .from('orders')
-    .select('order_number, total_amount, discount_amount, shipping_address, customer_note, placed_at, order_items(product_name, product_id, variant_id, quantity, unit_price)')
+    .select('order_number, total_amount, discount_amount, shipping_address, customer_note, placed_at')
     .eq('id', orderId)
     .single();
+
+  if (orderRowError) {
+    logger.error('handlePaymentConfirmed: order fetch failed', { orderId, error: orderRowError.message });
+  }
+
+  const { data: orderItemsRows, error: orderItemsError } = await supabaseAdmin
+    .from('order_items')
+    .select('product_name, product_id, variant_id, quantity, unit_price')
+    .eq('order_id', orderId);
+
+  if (orderItemsError) {
+    logger.error('handlePaymentConfirmed: order_items fetch failed', { orderId, error: orderItemsError.message });
+  }
+
+  const orderData = orderRow
+    ? { ...orderRow, order_items: orderItemsRows ?? [] }
+    : null;
 
   // Decrement inventory for each confirmed item
   if (orderData) {
@@ -156,6 +226,14 @@ async function handlePaymentConfirmed(opts: {
 
     const email = authUser.user?.email;
 
+    if (!email) {
+      logger.warn('Payment confirmed but customer email not found — skipping confirmation email', { orderId, userId });
+    }
+
+    if (!orderData) {
+      logger.warn('Payment confirmed but orderData fetch returned null — skipping email/telegram', { orderId });
+    }
+
     if (orderData) {
       type RawItem = { product_name: string; quantity: number; unit_price: number };
       const od = orderData as unknown as {
@@ -199,7 +277,7 @@ async function handlePaymentConfirmed(opts: {
             od.discount_amount ?? 0,
             od.placed_at ?? undefined,
           ),
-        }).catch(() => {});
+        }).catch((err: Error) => logger.error('Customer confirmation email failed', { orderId, email, error: err.message }));
       }
 
       // ── Admin email notification ─────────────────────────────────────────
@@ -217,7 +295,7 @@ async function handlePaymentConfirmed(opts: {
             od.shipping_address ?? undefined,
             od.discount_amount ?? 0,
           ),
-        }).catch(() => {});
+        }).catch((err: Error) => logger.error('Admin order notification email failed', { orderId, error: err.message }));
       }
 
       // ── Admin Telegram notification ──────────────────────────────────────
@@ -257,10 +335,14 @@ async function handlePaymentConfirmed(opts: {
         od.customer_note ? `  Customer note: ${od.customer_note}` : '',
       ].filter((l) => l !== undefined && l !== null).join('\n');
 
-      sendTelegramMessage(tgMessage).catch(() => {});
+      sendTelegramMessage(tgMessage).catch((err: Error) => logger.error('Telegram notification failed', { orderId, error: err.message }));
     }
-  } catch {
-    // Notification failure must never break the payment confirmation response
+  } catch (notifErr) {
+    logger.error('Payment notification block threw unexpectedly', {
+      orderId,
+      userId,
+      error: (notifErr as Error)?.message ?? String(notifErr),
+    });
   }
 
   paymentsProcessedTotal.inc({ provider: 'paystack', status: 'paid' });
@@ -300,12 +382,15 @@ export async function initializePayment(userId: string, orderId: string) {
 
   const amountKobo = Math.round((order as { total_amount: number }).total_amount * 100);
 
+  const orderNumber = (order as { order_number: string }).order_number;
+  const customFields = await buildPaystackCustomFields(orderId, orderNumber);
+
   const data = await paystackRequest('/transaction/initialize', 'POST', {
     email,
     amount: amountKobo,
     currency: 'KES',
-    reference: `ORD-${(order as { order_number: string }).order_number}-${Date.now()}`,
-    metadata: { order_id: orderId, user_id: userId, order_number: (order as { order_number: string }).order_number },
+    reference: `ORD-${orderNumber}-${Date.now()}`,
+    metadata: { order_id: orderId, user_id: userId, order_number: orderNumber, custom_fields: customFields },
     callback_url: `${env.FRONTEND_URL}/checkout/confirm`,
   }) as { reference: string; authorization_url: string; access_code: string };
 
@@ -429,13 +514,15 @@ export async function chargeMpesa(userId: string, orderId: string, phone: string
                      phone.startsWith('0')     ? `+254${phone.slice(1)}` :
                                                  `+254${phone}`;
 
+  const customFields = await buildPaystackCustomFields(orderId, ord.order_number);
+
   const data = await paystackRequest('/charge', 'POST', {
     email,
     amount:       amountKobo,
     currency:     'KES',
     reference,
     mobile_money: { phone: normalized, provider: 'mpesa' },
-    metadata:     { order_id: orderId, user_id: userId, order_number: ord.order_number },
+    metadata:     { order_id: orderId, user_id: userId, order_number: ord.order_number, custom_fields: customFields },
   }) as { reference: string; status: string };
 
   await supabaseAdmin.from('payments').insert({

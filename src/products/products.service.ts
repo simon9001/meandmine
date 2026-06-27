@@ -381,15 +381,21 @@ export async function updateProduct(id: string, payload: Partial<{
   if (payload.attributes            !== undefined) updates.attributes              = payload.attributes;
   if (payload.tags                  !== undefined) updates.tags                    = payload.tags;
 
+  // Fetch current slug BEFORE update so we can clear the old slug cache if it changed
+  const { data: before } = await supabaseAdmin
+    .from('products').select('slug').eq('id', id).single();
+  const oldSlug = (before as { slug?: string } | null)?.slug;
+
   const { data, error } = await supabaseAdmin
     .from('products').update(updates).eq('id', id).select().single();
   if (error || !data) throw new NotFoundError('Product');
 
-  // Invalidate both the list cache and any slug-specific cache for this product
-  const row = data as { slug?: string };
+  const newSlug = (data as { slug?: string }).slug;
+  const slugsToClear = [...new Set([oldSlug, newSlug].filter(Boolean))] as string[];
+
   await Promise.all([
     cacheDelPattern('maschon:products:list:*'),
-    row.slug ? cacheDel(buildKey('products:slug', row.slug)) : Promise.resolve(),
+    ...slugsToClear.map((s) => cacheDel(buildKey('products:slug', s))),
   ]);
   return data;
 }

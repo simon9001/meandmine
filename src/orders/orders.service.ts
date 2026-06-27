@@ -35,16 +35,20 @@ export async function listOrders(userId: string, query: { page?: string; limit?:
     .select('id, order_id, product_id, product_name, product_sku, variant_options, quantity, unit_price, total_price, fulfillment_status')
     .in('order_id', orderIds);
 
-  // Step 3 — fetch product images for the items
+  // Step 3 — fetch product slugs + primary images for the items
   const productIds = [...new Set((items ?? []).map((i: Record<string, unknown>) => i.product_id as string).filter(Boolean))];
   const productMap: Record<string, { primary_image_url?: string; slug?: string }> = {};
   if (productIds.length > 0) {
-    const { data: products } = await supabaseAdmin
-      .from('products')
-      .select('id, primary_image_url, slug')
-      .in('id', productIds);
-    (products ?? []).forEach((p: Record<string, unknown>) => {
-      productMap[p.id as string] = { primary_image_url: p.primary_image_url as string, slug: p.slug as string };
+    const [{ data: productRows }, { data: mediaRows }] = await Promise.all([
+      supabaseAdmin.from('products').select('id, slug').in('id', productIds),
+      supabaseAdmin.from('product_media').select('product_id, url').in('product_id', productIds).eq('is_primary', true),
+    ]);
+    (productRows ?? []).forEach((p: Record<string, unknown>) => {
+      productMap[p.id as string] = { slug: p.slug as string };
+    });
+    (mediaRows ?? []).forEach((m: Record<string, unknown>) => {
+      const pid = m.product_id as string;
+      if (productMap[pid]) productMap[pid].primary_image_url = m.url as string;
     });
   }
 
@@ -92,12 +96,16 @@ export async function getOrder(orderId: string, userId?: string) {
   const productIds = [...new Set((items ?? []).map((i: Record<string, unknown>) => i.product_id as string).filter(Boolean))];
   const productMap: Record<string, { primary_image_url?: string; slug?: string }> = {};
   if (productIds.length > 0) {
-    const { data: products } = await supabaseAdmin
-      .from('products')
-      .select('id, primary_image_url, slug')
-      .in('id', productIds);
-    (products ?? []).forEach((p: Record<string, unknown>) => {
-      productMap[p.id as string] = { primary_image_url: p.primary_image_url as string, slug: p.slug as string };
+    const [{ data: productRows }, { data: mediaRows }] = await Promise.all([
+      supabaseAdmin.from('products').select('id, slug').in('id', productIds),
+      supabaseAdmin.from('product_media').select('product_id, url').in('product_id', productIds).eq('is_primary', true),
+    ]);
+    (productRows ?? []).forEach((p: Record<string, unknown>) => {
+      productMap[p.id as string] = { slug: p.slug as string };
+    });
+    (mediaRows ?? []).forEach((m: Record<string, unknown>) => {
+      const pid = m.product_id as string;
+      if (productMap[pid]) productMap[pid].primary_image_url = m.url as string;
     });
   }
 
